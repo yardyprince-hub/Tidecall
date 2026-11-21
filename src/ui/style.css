@@ -89,3 +89,30 @@ input, textarea { font: inherit; color: var(--ink); background: #0d1720; border:
 h1.busy { animation: busy-pulse 1.6s ease-in-out infinite; }
 @keyframes busy-pulse { 50% { opacity: 0.45; } }
 @media (prefers-reduced-motion: reduce) { h1.busy { animation: none; } }
+
+/* Camp life */
+#island { height: 520px; }
+.camp-status { display: grid; gap: 6px; background: #0d1720; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin: 8px 0; font-size: 0.92rem; }
+.camp-status .note { margin: 2px 0; }
+.stat { display: grid; grid-template-columns: 96px minmax(80px, 200px) 1fr; gap: 10px; align-items: center; }
+.stat-name { color: var(--muted); font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.05em; }
+.bar { height: 10px; border-radius: 5px; background: #213447; overflow: hidden; }
+.bar i { display: block; height: 100%; border-radius: 5px; transition: width 0.3s ease; }
+.bar.wood i { background: linear-gradient(90deg, #a87b45, #e0b36e); }
+.bar.food i { background: linear-gradient(90deg, #4fbf8b, #a6e36f); }
+.bar.food.short i { background: linear-gradient(90deg, #e0675c, #f2a541); }
+.bar.energy i { background: linear-gradient(90deg, #f2a541, #ffd27a); }
+.gear-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.gear-row .stat-name { width: 96px; }
+.gear { font-size: 0.8rem; padding: 2px 8px; border-radius: 999px; border: 1px dashed var(--line); color: #5f7688; cursor: help; }
+.gear.have { border: 1px solid var(--accent); color: var(--accent); background: rgba(242, 165, 65, 0.1); }
+.condition { padding: 8px 12px; border-radius: 8px; background: var(--card); }
+.condition.good { border-left: 4px solid var(--good); }
+.condition.bad { border-left: 4px solid var(--bad); }
+.reward { padding: 8px 12px; border-radius: 8px; background: var(--card); }
+.reward.ours { border-left: 4px solid var(--accent); }
+@media (max-width: 720px) {
+  #island { height: 380px; }
+  .stat { grid-template-columns: 80px 1fr; }
+  .stat > span:last-child { grid-column: 1 / -1; }
+}

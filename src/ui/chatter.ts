@@ -6,7 +6,6 @@ import type { Rng } from "../engine/rng.js";
  */
 const CAMP = [
   "Anyone else hear the drums last night?",
-  "I'm keeping my head down and working on the shelter.",
   "We need to win the next challenge, full stop.",
   "{name}, can we talk later? Just us.",
   "I trust this crew. Mostly.",
@@ -14,6 +13,27 @@ const CAMP = [
   "If we lose, I think we keep it simple.",
   "{name} pulled their weight today, credit where it's due.",
 ];
+
+/** Camp lines that match what the castaway is actually doing today. */
+const CHORES: Record<string, string[]> = {
+  palm: [
+    "Heading up to the palms. That shelter isn't going to build itself.",
+    "I'll cut fronds for the roof. Somebody grab the big branches?",
+    "Another night on the sand and I'm done. I'm on shelter duty.",
+  ],
+  fruit: [
+    "I'm going to pick fruit before we all start fighting over the rice.",
+    "Found a fruit tree up the hill yesterday. I'll bring back what I can.",
+  ],
+  fish: [
+    "I'm going down to the rocks to fish. Wish me luck.",
+    "Fish for dinner if the tide's on our side. I'm on it.",
+  ],
+  rest: [
+    "I'm saving my energy for the challenge, honestly.",
+    "Somebody has to keep the fire company.",
+  ],
+};
 
 const SCRAMBLE = [
   "I'm voting {name}. Nothing personal.",
@@ -56,6 +76,7 @@ function fill(line: string, rng: Rng, names: string[]): string {
 }
 
 export const chatter = {
+  chore: (rng: Rng, chore: string) => fresh(rng, CHORES[chore] ?? CHORES.rest!),
   camp: (rng: Rng, names: string[]) => fill(fresh(rng, CAMP), rng, names),
   scramble: (rng: Rng, names: string[]) => fill(fresh(rng, SCRAMBLE), rng, names),
   dmReply: (rng: Rng, names: string[]) => fill(fresh(rng, DM_REPLIES), rng, names),

@@ -17,15 +17,20 @@ export const CHALLENGES: Record<ChallengeKind, { title: string; howTo: string }>
   },
 };
 
-/** Every challenge scores 0..1000 so they compare with each other and with bot scores. */
-export function runChallenge(kind: ChallengeKind, root: HTMLElement, rng: Rng): Promise<number> {
+/**
+ * Every challenge scores 0..1000 so they compare with each other and with bot scores.
+ * `ease` is the castaway's condition from camp (about 0.6 to 1.3): rested and fed makes the
+ * challenge easier (longer glows, slower signals, a wider and slower bridge), tired and hungry harder.
+ */
+export function runChallenge(kind: ChallengeKind, root: HTMLElement, rng: Rng, ease = 1): Promise<number> {
+  const e = Math.min(1.3, Math.max(0.6, ease));
   switch (kind) {
     case "memory":
-      return memory(root, rng);
+      return memory(root, rng, e);
     case "sequence":
-      return sequence(root, rng);
+      return sequence(root, rng, e);
     case "timing":
-      return timing(root, rng);
+      return timing(root, rng, e);
   }
 }
 
@@ -38,7 +43,7 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: 
   return e;
 }
 
-async function memory(root: HTMLElement, rng: Rng): Promise<number> {
+async function memory(root: HTMLElement, rng: Rng, ease: number): Promise<number> {
   root.innerHTML = "";
   const status = el("p", "challenge-status", "Watch closely...");
   const grid = el("div", "pool-grid");
@@ -58,7 +63,7 @@ async function memory(root: HTMLElement, rng: Rng): Promise<number> {
     const lit = new Set(rng.shuffle([...Array(16).keys()]).slice(0, count));
     await wait(500);
     lit.forEach((i) => cells[i]!.classList.add("lit"));
-    await wait(1400);
+    await wait(1400 * ease);
     lit.forEach((i) => cells[i]!.classList.remove("lit"));
     status.textContent = `Tap the ${count} pools that glowed.`;
     cells.forEach((c) => (c.disabled = false));
@@ -87,7 +92,7 @@ async function memory(root: HTMLElement, rng: Rng): Promise<number> {
   return Math.min(1000, total + 1);
 }
 
-async function sequence(root: HTMLElement, rng: Rng): Promise<number> {
+async function sequence(root: HTMLElement, rng: Rng, ease: number): Promise<number> {
   root.innerHTML = "";
   const status = el("p", "challenge-status", "Watch the fires...");
   const row = el("div", "fire-row");
@@ -108,9 +113,9 @@ async function sequence(root: HTMLElement, rng: Rng): Promise<number> {
     await wait(600);
     for (const i of seq) {
       fires[i]!.classList.add("lit");
-      await wait(450);
+      await wait(450 * ease);
       fires[i]!.classList.remove("lit");
-      await wait(150);
+      await wait(150 * ease);
     }
     status.textContent = `Repeat the signal of ${length}.`;
     fires.forEach((f) => (f.disabled = false));
@@ -139,7 +144,7 @@ async function sequence(root: HTMLElement, rng: Rng): Promise<number> {
   return best === 0 ? 0 : Math.min(1000, Math.round(((best - 2) / 7) * 1000));
 }
 
-async function timing(root: HTMLElement, rng: Rng): Promise<number> {
+async function timing(root: HTMLElement, rng: Rng, ease: number): Promise<number> {
   root.innerHTML = "";
   const status = el("p", "challenge-status");
   const bar = el("div", "bridge");
@@ -152,11 +157,11 @@ async function timing(root: HTMLElement, rng: Rng): Promise<number> {
 
   for (let attempt = 1; attempt <= 5; attempt++) {
     status.textContent = `Try ${attempt} of 5`;
-    const width = 0.14 - attempt * 0.015;
+    const width = (0.14 - attempt * 0.015) * ease;
     const start = 0.1 + rng.next() * (0.8 - width);
     zone.style.left = `${start * 100}%`;
     zone.style.width = `${width * 100}%`;
-    const speed = 0.7 + attempt * 0.15; // track widths per second
+    const speed = (0.7 + attempt * 0.15) / ease; // track widths per second
     const t0 = performance.now();
     let pos = 0;
     let raf = 0;

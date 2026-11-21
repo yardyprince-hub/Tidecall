@@ -1,4 +1,16 @@
+import type { GatherSource, Supply } from "./camp.js";
+
 export type PlayerId = string;
+
+/** What a castaway brought back to camp. */
+export type Haul = Record<Supply, number>;
+
+/** A castaway's plan for the day: spend this much energy at this source. */
+export interface Chore {
+  source: GatherSource;
+  energy: number;
+  spent: number;
+}
 
 export type Phase =
   | "camp" // chat, private messages, one relic search each
@@ -21,6 +33,16 @@ export interface Player {
   relics: number;
   /** Has this player already searched for a relic this round? */
   searchedThisRound: boolean;
+  /** Energy left today for gathering (one trip to a palm or fruit tree costs 1, fishing 2). */
+  energy: number;
+  /** Today's full energy, set by how the camp rested and ate. */
+  maxEnergy: number;
+  /** What they've brought back to camp today. */
+  gathered: Haul;
+  /** What they brought back during the previous round. */
+  gatheredLastRound: Haul;
+  /** What a computer castaway planned to do today (null for the human or nobody yet). */
+  chore: Chore | null;
   /** Round in which the player was voted out, if any. */
   outInRound?: number;
 }

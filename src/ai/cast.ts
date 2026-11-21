@@ -1,4 +1,5 @@
 import { PlaceholderBot } from "../engine/bots.js";
+import { formatFactor, MEALS_PER_DAY, REWARDS, shelterTier, SOURCES } from "../engine/camp.js";
 import { MERGED, type Season } from "../engine/season.js";
 import type { PlayerId } from "../engine/types.js";
 import type { AiClient } from "./client.js";
@@ -117,8 +118,42 @@ export class Cast {
       plan: bot?.plan ?? "",
       privateChat: this.lines(chat.filter((m) => m.channel === `dm:${id}`).slice(-16)),
       groupChat: group ? this.lines(chat.filter((m) => m.channel === group && m.round === s.round).slice(-20)) : [],
+      ...this.campInfo(id),
       humanName: this.name(this.humanId),
     };
+  }
+
+  /** What a castaway can see around their own camp: the shelter, the food, who brought what back. */
+  private campInfo(id: PlayerId): Pick<CastawayView, "campLife" | "todaysWork" | "contributions"> {
+    const s = this.season;
+    const me = s.player(id);
+    if (me.status !== "active") return { campLife: [], todaysWork: "", contributions: [] };
+    const camp = s.campOf(id);
+    const members = s.campMembers(camp.name);
+    const tier = shelterTier(camp.materials);
+    const c = camp.condition;
+    const campLife = [
+      `Shelter: ${camp.materials} materials, which makes ${tier.index === 0 ? "no real shelter yet" : `a ${tier.name.toLowerCase()}`}.${tier.next ? ` ${tier.next} materials makes the next stage.` : ""} Wind and rain strip some materials off every night${camp.items.includes("tarp") ? " (the tarp halves that)" : ""}.`,
+      `Food store: ${camp.food} meals. Your camp of ${members.length} eats ${members.length * MEALS_PER_DAY} tonight.`,
+      `Camp gear: ${camp.items.length ? camp.items.map((i) => REWARDS[i].name.toLowerCase()).join(", ") : "nothing yet (gear is won as a reward at challenges)"}.`,
+      s.round === 1 && c.parts.length === 0
+        ? "You washed ashore this morning."
+        : `Last night: ${c.parts.map((p) => p.label.toLowerCase()).join(", ")}. Overall condition ${formatFactor(c.factor)} at challenges.`,
+    ];
+    const chore = me.chore;
+    const trips = chore ? Math.floor(chore.energy / SOURCES[chore.source].energy) : 0;
+    const todaysWork = !chore
+      ? "You haven't picked a job today."
+      : trips === 0
+        ? "You're taking it easy today and barely helping around camp."
+        : `Today you ${SOURCES[chore.source].verb} for the camp (${trips} trip${trips === 1 ? "" : "s"}${trips <= 3 ? ", not much" : ""}).`;
+    const haul = (h: { wood: number; food: number }) =>
+      h.wood || h.food ? [h.wood ? `${h.wood} material${h.wood === 1 ? "" : "s"}` : "", h.food ? `${h.food} food` : ""].filter(Boolean).join(" and ") : "nothing";
+    const contributions = members.map(
+      (p) =>
+        `${p.id === id ? "You" : p.name}: today ${haul(p.gathered)}${s.round > 1 ? `; last round ${haul(p.gatheredLastRound)}` : ""}`,
+    );
+    return { campLife, todaysWork, contributions };
   }
 
   /** A line of dialogue, or null if the AI is off or failed (caller uses a canned line). */

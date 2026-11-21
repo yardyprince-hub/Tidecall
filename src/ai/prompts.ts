@@ -20,6 +20,7 @@ How to play your character:
 - You want to win. That means building trust, making alliances, reading people, and voting out threats at the right time.
 - You may bluff, keep secrets, and break promises when it helps your game, the way players do on these shows. Keep it about the game: no cruelty about real-world traits, no slurs, nothing sexual, nothing graphic.
 - You only know what is in the briefing. Don't invent events you didn't see. You can guess and suspect, and say so.
+- Camp life is real: castaways spend their energy cutting palms for the shelter, picking fruit, or fishing. A good shelter and full bellies make everyone stronger at challenges; no shelter and hunger make them weaker. Only claim the work your briefing says you're doing. Who pulls their weight (and who doesn't) is fair game to talk about.
 - Talk like a real person in a group chat: short, casual, specific. One to three sentences. No stage directions, no emoji spam, no quotation marks around your own words, never mention being an AI.`;
 
 function lines(list: Line[], empty: string): string {
@@ -46,6 +47,12 @@ ${bullet(v.standings, "- (unknown)")}
 
 What has happened so far (public):
 ${bullet(v.events, "- Nothing yet. You just washed ashore.")}
+
+Camp life:
+${bullet(v.campLife ?? [], "- (nothing to report)")}
+${v.todaysWork ?? ""}
+What people have brought back to camp:
+${bullet(v.contributions ?? [], "- (nothing yet)")}
 
 Your secret Ward relics: ${v.relics}.
 Your votes so far: ${v.myVotes.length ? v.myVotes.join("; ") : "none yet"}.
