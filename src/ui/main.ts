@@ -5,6 +5,7 @@ import { MERGED, Season } from "../engine/season.js";
 import { PROTOTYPE_CONFIG, type PlayerId } from "../engine/types.js";
 import { CHALLENGES, runChallenge, type ChallengeKind } from "./challenges.js";
 import { chatter } from "./chatter.js";
+import { Island, type Interaction } from "./island.js";
 
 const YOU = "you";
 const CASTAWAY_NAMES = ["Ana", "Bo", "Cyra", "Dez", "Emre", "Fen", "Gil", "Hana", "Isa", "Jory", "Kai", "Lu"];
@@ -29,6 +30,7 @@ interface Game {
 
 const app = document.getElementById("app") as HTMLElement;
 let game: Game | null = null;
+let island: Island | null = null;
 
 // ---------- helpers ----------
 
@@ -79,6 +81,7 @@ function campChannel(): string {
 
 function say(channel: string, from: PlayerId, text: string): void {
   game!.chat.push({ round: game!.season.round, channel, from, text });
+  if (from !== YOU) island?.say(from, text);
 }
 
 // ---------- layout ----------
@@ -113,6 +116,8 @@ function rank(group: string): number {
 }
 
 function page(main: string): void {
+  island?.destroy();
+  island = null;
   app.innerHTML = `<div class="layout">${game ? sidebar() : ""}<main class="panel">${main}</main></div>`;
 }
 
@@ -219,47 +224,107 @@ function wireChat(rerender: () => void, lines: (rng: Rng, names: string[]) => st
 
 function renderCamp(): void {
   const s = game!.season;
-  const searched = me().searchedThisRound;
   page(`
     <h1>Camp</h1>
-    <p class="lead">${s.isMerged ? "One camp now. Every castaway for themselves." : `You're on the ${esc(me().crew)} crew.`} Talk, scheme, and search for relics before the challenge.</p>
-    ${chatPanel("at camp")}
-    <div class="cards">
-      <section class="card">
-        <h3>Search for relics</h3>
-        <p>One search per round. A Ward relic cancels every vote against you at one council.</p>
-        <button id="search" ${searched ? "disabled" : ""}>${searched ? "Searched this round" : "Search the shoreline"}</button>
-        <p id="search-result" class="note"></p>
-      </section>
-      <section class="card">
-        <h3>Confessional</h3>
-        <p>Talk to the camera. Nobody still playing will see this. The jury will.</p>
-        <form id="conf" class="stack"><textarea name="text" rows="2" maxlength="500"></textarea><button>Record</button></form>
-      </section>
+    <p class="lead">${s.isMerged ? "One camp now. Every castaway for themselves." : `You're on the ${esc(me().crew)} crew.`} Walk with WASD or the arrow keys, or tap where you want to go. Walk up to a castaway or a place and press E.</p>
+    <div class="island-wrap">
+      <canvas id="island" aria-label="The island. Use WASD or arrow keys to walk, E to interact."></canvas>
+      <button id="act" class="act">Interact</button>
     </div>
-    <button id="go" class="primary">Head to the challenge</button>`);
-  wireChat(renderCamp, chatter.camp);
-  on("#search", () => {
-    const found = s.searchForRelic(YOU);
-    renderCamp();
-    const out = app.querySelector("#search-result");
-    if (out) out.textContent = found ? "You found a Ward relic! Keep it secret." : "Nothing but driftwood.";
-  });
-  on(
-    "#conf",
-    (e) => {
-      e.preventDefault();
-      const t = (e.target as HTMLFormElement).elements.namedItem("text") as HTMLTextAreaElement;
-      s.addConfessional(YOU, t.value);
-      t.value = "";
-      t.placeholder = "Recorded.";
+    <p id="rumor" class="note rumor"></p>
+    <div id="chat-slot"></div>
+    <div id="conf-slot"></div>
+    <div class="row">
+      <button id="go" class="primary">Head to the challenge</button>
+      <span class="note">Tip: dig spots are marked with an X on the beach. One dig per round.</span>
+    </div>`);
+  const canvas = app.querySelector("#island") as HTMLCanvasElement;
+  island = new Island(canvas, {
+    castaways: s.active().map((p) => ({ id: p.id, name: p.name, crew: p.crew, isYou: p.id === YOU })),
+    merged: s.isMerged,
+    yourCrew: me().crew,
+    seed: s.round * 7919 + s.players.length,
+    onInteract: handleIslandInteraction,
+    onRumor: (text) => {
+      const el = app.querySelector("#rumor");
+      if (el) el.textContent = text;
     },
-    "submit",
-  );
-  on("#go", () => {
-    s.advance();
-    renderChallengeIntro();
   });
+  // Replay this round's camp chatter as speech bubbles.
+  const lines = game!.chat.filter((m) => m.round === s.round && m.channel === campChannel() && m.from !== YOU);
+  lines.forEach((m, i) => setTimeout(() => island?.say(m.from, m.text), 600 + i * 1800));
+  renderChatSlot();
+  on("#act", () => island?.interact());
+  on("#go", goToChallenge);
+}
+
+function renderChatSlot(): void {
+  const slot = app.querySelector("#chat-slot");
+  if (!slot) return;
+  slot.innerHTML = chatPanel("at camp");
+  wireChat(renderChatSlot, chatter.camp);
+}
+
+function goToChallenge(): void {
+  game!.season.advance();
+  renderChallengeIntro();
+}
+
+function handleIslandInteraction(what: Interaction): void {
+  const s = game!.season;
+  switch (what.kind) {
+    case "castaway": {
+      if (!campmates().includes(what.id)) {
+        island?.showToast(`${name(what.id)} is on the other crew. Save it for the merge.`);
+        return;
+      }
+      game!.channel = `dm:${what.id}`;
+      renderChatSlot();
+      island?.showToast(`Private chat with ${name(what.id)}`);
+      (app.querySelector("#say input") as HTMLInputElement | null)?.focus();
+      return;
+    }
+    case "bonfire":
+      game!.channel = campChannel();
+      renderChatSlot();
+      island?.showToast(s.isMerged ? "Talking to the whole camp" : "Talking to your crew");
+      (app.querySelector("#say input") as HTMLInputElement | null)?.focus();
+      return;
+    case "dig": {
+      if (me().searchedThisRound) {
+        island?.showToast("You've already dug this round.");
+        return;
+      }
+      const found = s.searchForRelic(YOU);
+      island?.showToast(found ? "You found a Ward relic! Keep it secret." : "Nothing but driftwood.", 3500);
+      const relics = app.querySelector(".relics");
+      if (relics) relics.textContent = `Your relics: ${me().relics}`;
+      return;
+    }
+    case "hut": {
+      const slot = app.querySelector("#conf-slot");
+      if (!slot) return;
+      slot.innerHTML = `
+        <section class="card">
+          <h3>Confession hut</h3>
+          <p>Talk to the camera. Nobody still playing will see this. The jury will.</p>
+          <form id="conf" class="stack"><textarea name="text" rows="2" maxlength="500"></textarea><button>Record</button></form>
+        </section>`;
+      const form = slot.querySelector("#conf") as HTMLFormElement;
+      (form.elements.namedItem("text") as HTMLTextAreaElement).focus();
+      form.addEventListener("submit", (e) => {
+        e.preventDefault();
+        const t = form.elements.namedItem("text") as HTMLTextAreaElement;
+        s.addConfessional(YOU, t.value);
+        slot.innerHTML = "";
+        island?.showToast("Confessional recorded.");
+      });
+      return;
+    }
+    case "arena":
+      goToChallenge();
+      return;
+  }
 }
 
 // ---------- challenge ----------
