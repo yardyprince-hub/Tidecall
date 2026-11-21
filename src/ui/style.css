@@ -83,3 +83,9 @@ input, textarea { font: inherit; color: var(--ink); background: #0d1720; border:
 .act { position: absolute; right: 10px; bottom: 10px; display: none; }
 .rumor { min-height: 1.4em; font-style: italic; }
 @media (max-width: 720px) { #island { height: 360px; } .act { display: block; } }
+
+/* AI castaways */
+.messages .typing { color: var(--muted); font-style: italic; font-size: 0.9rem; }
+h1.busy { animation: busy-pulse 1.6s ease-in-out infinite; }
+@keyframes busy-pulse { 50% { opacity: 0.45; } }
+@media (prefers-reduced-motion: reduce) { h1.busy { animation: none; } }
