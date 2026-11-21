@@ -40,13 +40,24 @@ const CONFESSIONALS = [
   "If I get to the end, this jury will respect how I played.",
 ];
 
+const recent: string[] = [];
+
+/** Pick a line that hasn't been used in the last few picks, so castaways don't echo each other. */
+function fresh(rng: Rng, lines: string[]): string {
+  const options = lines.filter((l) => !recent.includes(l));
+  const line = rng.pick(options.length ? options : lines);
+  recent.push(line);
+  if (recent.length > 5) recent.shift();
+  return line;
+}
+
 function fill(line: string, rng: Rng, names: string[]): string {
   return line.replace("{name}", names.length ? rng.pick(names) : "someone");
 }
 
 export const chatter = {
-  camp: (rng: Rng, names: string[]) => fill(rng.pick(CAMP), rng, names),
-  scramble: (rng: Rng, names: string[]) => fill(rng.pick(SCRAMBLE), rng, names),
-  dmReply: (rng: Rng, names: string[]) => fill(rng.pick(DM_REPLIES), rng, names),
-  confessional: (rng: Rng, names: string[]) => fill(rng.pick(CONFESSIONALS), rng, names),
+  camp: (rng: Rng, names: string[]) => fill(fresh(rng, CAMP), rng, names),
+  scramble: (rng: Rng, names: string[]) => fill(fresh(rng, SCRAMBLE), rng, names),
+  dmReply: (rng: Rng, names: string[]) => fill(fresh(rng, DM_REPLIES), rng, names),
+  confessional: (rng: Rng, names: string[]) => fill(fresh(rng, CONFESSIONALS), rng, names),
 };

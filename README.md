@@ -16,7 +16,10 @@ Building the first prototype: a solo season in the browser, one player against 7
   ties and revotes, swap, merge, jury, final vote, jurors leaving early). No UI, AI or networking.
 - `src/engine/bots.ts`: simple placeholder castaways for testing, and `autoplay` to run a season.
 - `src/sim.ts`: plays a whole season with bots and prints it.
-- `src/ui/`: the browser game. Camp (crew chat, private chats, relic search, confessionals),
+- `src/ui/island.ts`: the walkable island drawn on a canvas. Walk with WASD, arrow keys or by
+  tapping; walk up to castaways, your camp fire, dig spots, the confession hut or the challenge
+  beach and press E.
+- `src/ui/`: the browser game. Camp on the island (crew chat, private chats, relic digs, confessionals),
   three challenges (Tide Pools, Signal Fires, Rope Bridge), the scramble, Lantern Council with
   a one-by-one vote reveal, the Jury Lounge, the final council and an end-of-season recap.
 

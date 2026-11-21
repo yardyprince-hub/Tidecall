@@ -78,3 +78,8 @@ input, textarea { font: inherit; color: var(--ink); background: #0d1720; border:
   .pool-grid { grid-template-columns: repeat(4, 56px); }
   .pool { width: 56px; height: 56px; }
 }
+.island-wrap { position: relative; margin: 12px 0 4px; }
+#island { display: block; width: 100%; height: 460px; border-radius: 10px; border: 1px solid var(--line); touch-action: none; cursor: pointer; }
+.act { position: absolute; right: 10px; bottom: 10px; display: none; }
+.rumor { min-height: 1.4em; font-style: italic; }
+@media (max-width: 720px) { #island { height: 360px; } .act { display: block; } }
