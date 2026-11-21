@@ -9,3 +9,17 @@ Design doc: https://claude.ai/artifact/7anBYMJCJDiWSPYnQrzp5w
 ## Status
 
 Building the first prototype: a solo season in the browser, one player against 7 AI castaways.
+
+## What's here so far
+
+- `src/engine/season.ts`: the rules of a season (crews, challenges, council votes, relics,
+  ties and revotes, swap, merge, jury, final vote, jurors leaving early). No UI, AI or networking.
+- `src/engine/bots.ts`: simple placeholder castaways for testing, and `autoplay` to run a season.
+- `src/sim.ts`: plays a whole season with bots and prints it.
+
+```
+npm install
+npm test            # rules tests
+npm run sim -- 7    # simulate the 8-player prototype season with seed 7
+npm run sim -- 7 live   # simulate the 12-player live rules
+```
