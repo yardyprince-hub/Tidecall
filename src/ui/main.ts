@@ -1,5 +1,8 @@
 import "./style.css";
-import { PlaceholderBot } from "../engine/bots.js";
+import { AiCastaway, Cast, type ChatMessage } from "../ai/cast.js";
+import { httpAiClient } from "../ai/client.js";
+import { dealPersonas } from "../ai/personas.js";
+import type { AiStatus } from "../ai/protocol.js";
 import { Rng } from "../engine/rng.js";
 import { MERGED, Season } from "../engine/season.js";
 import { PROTOTYPE_CONFIG, type PlayerId } from "../engine/types.js";
@@ -10,17 +13,9 @@ import { Island, type Interaction } from "./island.js";
 const YOU = "you";
 const CASTAWAY_NAMES = ["Ana", "Bo", "Cyra", "Dez", "Emre", "Fen", "Gil", "Hana", "Isa", "Jory", "Kai", "Lu"];
 
-interface ChatMessage {
-  round: number;
-  /** "crew", "camp" (merged), or "dm:<id>" for a private chat with that castaway. */
-  channel: string;
-  from: PlayerId;
-  text: string;
-}
-
 interface Game {
   season: Season;
-  bots: Map<PlayerId, PlaceholderBot>;
+  cast: Cast;
   rng: Rng;
   chat: ChatMessage[];
   channel: string;
@@ -31,6 +26,9 @@ interface Game {
 const app = document.getElementById("app") as HTMLElement;
 let game: Game | null = null;
 let island: Island | null = null;
+let ai: AiStatus = { enabled: false };
+/** Who is "typing" right now, shown under the chat. */
+const typing = new Set<PlayerId>();
 
 // ---------- helpers ----------
 
@@ -40,32 +38,18 @@ const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const name = (id: PlayerId) => (game ? game.season.player(id).name : id);
 const me = () => game!.season.player(YOU);
 
-function botsAct(): void {
-  const { season, bots } = game!;
-  for (const bot of bots.values()) {
-    const p = season.player(bot.id);
-    switch (season.phase) {
-      case "camp":
-        if (p.status === "active") bot.onCamp(season);
-        break;
-      case "challenge":
-        if (p.status === "active") bot.onChallenge(season);
-        break;
-      case "council":
-        bot.onCouncil(season);
-        break;
-      case "final":
-        bot.onFinal(season);
-        break;
-      default:
-        break;
-    }
-  }
+/** Let the castaways do whatever the current phase needs. Votes may take a few seconds with AI on. */
+async function botsAct(): Promise<void> {
+  await game!.cast.act(game!.finalStatement);
 }
 
 function afterCouncilRevealed(): void {
-  const { season, bots } = game!;
-  for (const bot of bots.values()) bot.onCouncilRevealed(season);
+  game!.cast.onCouncilRevealed();
+}
+
+/** A holding screen while the castaways think. */
+function busy(text: string): void {
+  page(`<h1 class="busy">${esc(text)}</h1><p class="note">${ai.enabled ? "The castaways are thinking it over." : ""}</p>`);
 }
 
 /** Bots in the player's camp (crew-mates before the merge, everyone after). */
@@ -79,9 +63,37 @@ function campChannel(): string {
   return game!.season.isMerged ? "camp" : "crew";
 }
 
-function say(channel: string, from: PlayerId, text: string): void {
-  game!.chat.push({ round: game!.season.round, channel, from, text });
-  if (from !== YOU) island?.say(from, text);
+function say(channel: string, from: PlayerId, text: string): ChatMessage {
+  const msg = { round: game!.season.round, channel, from, text };
+  game!.chat.push(msg);
+  // Private chats stay private: only group talk shows as a speech bubble on the island.
+  if (from !== YOU && !channel.startsWith("dm:")) island?.say(from, text);
+  refreshMessages();
+  return msg;
+}
+
+/** Ask a castaway for a line (AI if on, canned otherwise) and say it, showing "typing" meanwhile. */
+async function speak(
+  id: PlayerId,
+  channel: string,
+  kind: "camp" | "scramble" | "reply" | "dm",
+  canned: () => string,
+  replyTo?: ChatMessage,
+): Promise<void> {
+  const g = game!;
+  const round = g.season.round;
+  typing.add(id);
+  refreshMessages();
+  const text = (await g.cast.line(id, kind, replyTo)) ?? canned();
+  typing.delete(id);
+  // Drop the line if the game moved on while it was being written.
+  if (game !== g || g.season.round !== round || g.season.player(id).status !== "active") return refreshMessages();
+  say(channel, id, text);
+}
+
+/** Names a castaway might mention: everyone they live with except themselves. */
+function namesFor(id: PlayerId): string[] {
+  return [...campmates().map(name), me().name].filter((n) => n !== name(id));
 }
 
 // ---------- layout ----------
@@ -136,12 +148,21 @@ function renderStart(): void {
       <label>Your name <input name="name" maxlength="16" required value="Castaway" /></label>
       <button class="primary" type="submit">Wash ashore</button>
     </form>
-    <p class="note">Prototype: the other castaways are simple stand-in bots. Smarter AI castaways come next.</p>`);
+    <p class="note" id="ai-note">Checking for AI castaways...</p>`);
+  const ready = httpAiClient.status().then((status) => {
+    ai = status;
+    const note = app.querySelector("#ai-note");
+    if (note)
+      note.textContent = status.enabled
+        ? "AI castaways are on: they talk, scheme, and bluff. Each message uses your Anthropic account."
+        : "AI castaways are off (no API key found), so the others are simple stand-in bots. The README explains how to turn them on.";
+  });
   on(
     "#start",
-    (e) => {
+    async (e) => {
       e.preventDefault();
       const input = (e.target as HTMLFormElement).elements.namedItem("name") as HTMLInputElement;
+      await ready;
       startSeason(input.value.trim() || "Castaway");
     },
     "submit",
@@ -154,23 +175,42 @@ function startSeason(playerName: string): void {
   const others = rng.shuffle(CASTAWAY_NAMES).slice(0, 7);
   const players = [{ id: YOU, name: playerName, isHuman: true }, ...others.map((n) => ({ id: n.toLowerCase(), name: n }))];
   const season = new Season(players, PROTOTYPE_CONFIG, seed);
-  const bots = new Map(others.map((n, i) => [n.toLowerCase(), new PlaceholderBot(n.toLowerCase(), seed + i + 1)]));
-  game = { season, bots, rng, chat: [], channel: "crew", lastChallenge: null, finalStatement: "" };
-  enterCamp();
+  const personas = dealPersonas(rng, others.length);
+  const castaways = others.map((n, i) => new AiCastaway(n.toLowerCase(), personas[i]!, seed + i + 1));
+  const chat: ChatMessage[] = [];
+  const cast = new Cast(season, YOU, castaways, () => chat, ai.enabled ? httpAiClient : null);
+  game = { season, cast, rng, chat, channel: "crew", lastChallenge: null, finalStatement: "" };
+  void enterCamp();
 }
 
 // ---------- camp ----------
 
-function enterCamp(): void {
-  const { season, rng } = game!;
+async function enterCamp(): Promise<void> {
+  const g = game!;
+  const { season, rng } = g;
   if (me().status !== "active") return renderSpectator();
-  botsAct();
-  const mates = campmates();
-  const names = mates.map(name);
-  for (const id of rng.shuffle(mates).slice(0, 3)) say(campChannel(), id, chatter.camp(rng, [...names, me().name].filter((n) => n !== name(id))));
-  for (const id of mates) if (rng.chance(0.5)) season.addConfessional(id, chatter.confessional(rng, names));
-  game!.channel = campChannel();
+  await botsAct();
+  g.channel = campChannel();
   renderCamp();
+  const mates = campmates();
+  const channel = campChannel();
+  const round = season.round;
+  // Camp talk, one after another so they can react to each other.
+  for (const id of rng.shuffle(mates).slice(0, 3)) {
+    if (game !== g || season.round !== round || season.phase !== "camp") return;
+    await speak(id, channel, "camp", () => chatter.camp(rng, namesFor(id)));
+  }
+  // Private confessionals, then each castaway's plan updates.
+  if (game !== g || season.round !== round) return;
+  await Promise.all(
+    mates
+      .filter(() => rng.chance(0.5))
+      .map(async (id) => {
+        if ((await g.cast.confess(id)) === null && season.player(id).status === "active") {
+          season.addConfessional(id, chatter.confessional(rng, mates.map(name)));
+        }
+      }),
+  );
 }
 
 function chatPanel(phaseLabel: string): string {
@@ -178,22 +218,39 @@ function chatPanel(phaseLabel: string): string {
   const mates = campmates();
   const tabs = [campChannel(), ...mates.map((id) => `dm:${id}`)];
   const label = (c: string) => (c.startsWith("dm:") ? name(c.slice(3)) : c === "crew" ? `${me().crew} crew` : "Whole camp");
-  const msgs = chat.filter((m) => m.channel === channel && m.round === season.round);
   return `
-    <div class="chat">
+    <div class="chat" data-empty="${esc(phaseLabel)}">
       <div class="tabs">${tabs
         .map((c) => `<button class="tab ${c === channel ? "on" : ""}" data-ch="${c}">${esc(label(c))}</button>`)
         .join("")}</div>
-      <div class="messages">${
-        msgs.length
-          ? msgs.map((m) => `<p><b>${esc(name(m.from))}:</b> ${esc(m.text)}</p>`).join("")
-          : `<p class="note">${channel.startsWith("dm:") ? "A private chat. Nobody else can read it." : `Nothing said yet ${phaseLabel}.`}</p>`
-      }</div>
+      <div class="messages">${messagesHtml(phaseLabel)}</div>
       <form id="say" class="row"><input name="text" maxlength="200" placeholder="Say something..." autocomplete="off" /><button>Send</button></form>
     </div>`;
 }
 
-function wireChat(rerender: () => void, lines: (rng: Rng, names: string[]) => string): void {
+function messagesHtml(phaseLabel: string): string {
+  const { season, chat, channel } = game!;
+  const msgs = chat.filter((m) => m.channel === channel && m.round === season.round);
+  const who = [...typing].filter((id) => (channel.startsWith("dm:") ? channel === `dm:${id}` : campmates().includes(id)));
+  const typingLine = who.length ? `<p class="typing">${who.map((id) => esc(name(id))).join(" and ")} ${who.length > 1 ? "are" : "is"} typing...</p>` : "";
+  const body = msgs.length
+    ? msgs.map((m) => `<p><b>${esc(name(m.from))}:</b> ${esc(m.text)}</p>`).join("")
+    : typingLine
+      ? ""
+      : `<p class="note">${channel.startsWith("dm:") ? "A private chat. Nobody else can read it." : `Nothing said yet ${phaseLabel}.`}</p>`;
+  return body + typingLine;
+}
+
+/** Update just the message list (keeps whatever the player is typing). */
+function refreshMessages(): void {
+  const box = app.querySelector<HTMLElement>(".chat .messages");
+  const panel = app.querySelector<HTMLElement>(".chat");
+  if (!box || !panel || !game) return;
+  box.innerHTML = messagesHtml(panel.dataset.empty ?? "");
+  box.scrollTop = box.scrollHeight;
+}
+
+function wireChat(rerender: () => void, lines: (rng: Rng, names: string[]) => string, kind: "camp" | "scramble"): void {
   app.querySelectorAll<HTMLButtonElement>(".tab").forEach((b) =>
     b.addEventListener("click", () => {
       game!.channel = b.dataset.ch as string;
@@ -208,17 +265,21 @@ function wireChat(rerender: () => void, lines: (rng: Rng, names: string[]) => st
       const text = input.value.trim();
       if (!text) return;
       const { rng, channel } = game!;
-      say(channel, YOU, text);
-      const others = campmates().map(name);
+      input.value = "";
+      const msg = say(channel, YOU, text);
       if (channel.startsWith("dm:")) {
         const who = channel.slice(3);
-        say(channel, who, chatter.dmReply(rng, others.filter((n) => n !== name(who))));
-      } else if (rng.chance(0.7)) {
-        const who = rng.pick(campmates());
-        say(channel, who, lines(rng, [...others, me().name].filter((n) => n !== name(who))));
+        void speak(who, channel, "dm", () => chatter.dmReply(rng, namesFor(who)), msg);
+      } else {
+        // Whoever was named answers; otherwise someone usually chimes in.
+        const mates = campmates();
+        const named = mates.filter((id) => text.toLowerCase().includes(name(id).toLowerCase()));
+        const responders = named.length ? named.slice(0, 2) : rng.chance(0.75) && mates.length ? [rng.pick(mates)] : [];
+        void (async () => {
+          for (const who of responders) await speak(who, channel, game!.cast.aiOn ? "reply" : kind, () => lines(rng, namesFor(who)), msg);
+        })();
       }
-      rerender();
-      (app.querySelector("#say input") as HTMLInputElement | null)?.focus();
+      input.focus();
     },
     "submit",
   );
@@ -264,7 +325,7 @@ function renderChatSlot(): void {
   const slot = app.querySelector("#chat-slot");
   if (!slot) return;
   slot.innerHTML = chatPanel("at camp");
-  wireChat(renderChatSlot, chatter.camp);
+  wireChat(renderChatSlot, chatter.camp, "camp");
 }
 
 function goToChallenge(): void {
@@ -349,7 +410,7 @@ function renderChallengeIntro(): void {
     const arena = app.querySelector("#arena") as HTMLElement;
     const score = await runChallenge(kind, arena, rng);
     season.submitChallengeScore(YOU, score);
-    botsAct();
+    await botsAct();
     season.advance();
     renderChallengeResult(score);
   });
@@ -370,18 +431,24 @@ function renderChallengeResult(score: number): void {
     <h1>${headline}</h1>
     <p class="lead">Your score: ${score} / 1000.</p>
     <button id="go" class="primary">${atCouncil ? "Talk before council" : "Watch the other crew's council"}</button>`);
-  on("#go", () => (atCouncil ? enterScramble() : runCouncilWithoutYou()));
+  on("#go", () => (atCouncil ? enterScramble() : void runCouncilWithoutYou()));
 }
 
 // ---------- scramble and council ----------
 
 function enterScramble(): void {
   const { rng } = game!;
-  const mates = campmates().filter((id) => game!.season.councilAttendees().includes(id));
-  const names = mates.map(name);
-  for (const id of rng.shuffle(mates).slice(0, 3)) say(campChannel(), id, chatter.scramble(rng, [...names, me().name].filter((n) => n !== name(id))));
-  game!.channel = campChannel();
+  const g = game!;
+  const mates = campmates().filter((id) => g.season.councilAttendees().includes(id));
+  g.channel = campChannel();
   renderScramble();
+  const channel = campChannel();
+  void (async () => {
+    for (const id of rng.shuffle(mates).slice(0, 3)) {
+      if (game !== g || g.season.phase !== "scramble") return;
+      await speak(id, channel, "scramble", () => chatter.scramble(rng, namesFor(id)));
+    }
+  })();
 }
 
 function renderScramble(): void {
@@ -390,17 +457,18 @@ function renderScramble(): void {
     <p class="lead">Council is close. Make your deals now.</p>
     ${chatPanel("before council")}
     <button id="go" class="primary">Go to Lantern Council</button>`);
-  wireChat(renderScramble, chatter.scramble);
-  on("#go", () => {
+  wireChat(renderScramble, chatter.scramble, "scramble");
+  on("#go", async () => {
     game!.season.advance();
-    botsAct();
+    busy("The castaways write down their votes...");
+    await botsAct();
     renderVote();
   });
 }
 
 function renderVote(): void {
   const s = game!.season;
-  if (!s.eligibleVoters().includes(YOU)) return finishCouncil();
+  if (!s.eligibleVoters().includes(YOU)) return void finishCouncil();
   const options = s.voteOptions(YOU);
   const revote = s.stage === "revote";
   const canRelic = !revote && me().relics > 0;
@@ -423,32 +491,34 @@ function renderVote(): void {
       const relic = form.elements.namedItem("relic") as HTMLInputElement | null;
       s.castVote(YOU, target);
       if (relic?.checked) s.playRelic(YOU);
-      finishCouncil();
+      void finishCouncil();
     },
     "submit",
   );
 }
 
 /** Resolve the council (and any revote), then show the reveal. */
-function finishCouncil(): void {
+async function finishCouncil(): Promise<void> {
   const s = game!.season;
   const before = s.councils.length;
   s.advance();
   if (s.councils.length === before) {
     // Revote stage.
-    botsAct();
+    busy("A tie! The castaways revote...");
+    await botsAct();
     return renderVote();
   }
   afterCouncilRevealed();
   void renderReveal();
 }
 
-function runCouncilWithoutYou(): void {
+async function runCouncilWithoutYou(): Promise<void> {
   const s = game!.season;
   const before = s.councils.length;
   s.advance(); // scramble -> council
+  busy("The other crew heads to Lantern Council...");
   while (s.councils.length === before) {
-    botsAct();
+    await botsAct();
     s.advance();
   }
   afterCouncilRevealed();
@@ -484,21 +554,21 @@ async function renderReveal(): Promise<void> {
     <h2 class="dark">${out.id === YOU ? "Your" : `${esc(out.name)}'s`} lantern goes dark.</h2>
     ${out.status === "jury" ? `<p>${out.id === YOU ? "You join" : "They join"} the jury.</p>` : ""}
     <button id="go" class="primary">Continue</button>`;
-  on("#go", nextAfterCouncil);
+  on("#go", () => void nextAfterCouncil());
 }
 
-function nextAfterCouncil(): void {
+async function nextAfterCouncil(): Promise<void> {
   const s = game!.season;
   if (s.phase === "final") return renderFinal();
   if (me().status !== "active") return renderSpectator();
-  enterCamp();
+  await enterCamp();
 }
 
 // ---------- after you're voted out ----------
 
 function renderSpectator(): void {
   const s = game!.season;
-  if (s.phase === "final") return renderFinal();
+  if (s.phase === "final") return void renderFinal();
   if (s.phase === "complete") return renderEnd();
   const juror = me().status === "jury";
   const confs = juror ? s.confessionalsVisibleTo(YOU) : [];
@@ -526,32 +596,49 @@ function renderSpectator(): void {
       <button id="watch" class="primary">Watch the next round</button>
       ${juror ? `<button id="leave">Leave the game</button>` : `<button id="skip">Skip to the end</button>`}
     </div>`);
-  on("#watch", () => {
-    // Bots play a whole round; we show its council.
+  on("#watch", async () => {
+    // The castaways play a whole round; we show its council.
+    busy("A new day on the island...");
+    await campConfessionals();
     while (s.phase !== "council" && s.phase !== "final") {
-      botsAct();
+      await botsAct();
       s.advance();
     }
     if (s.phase === "final") return renderFinal();
-    runCouncilFromCouncilPhase();
+    await runCouncilFromCouncilPhase();
   });
-  on("#skip", () => {
-    while (s.phase !== "complete") {
-      const before = s.councils.length;
-      botsAct();
-      s.advance();
-      if (s.councils.length > before) afterCouncilRevealed();
-    }
+  on("#skip", async () => {
+    busy("Playing out the rest of the season...");
+    await playToEnd();
     renderEnd();
   });
   on("#leave", renderLeave);
 }
 
-function runCouncilFromCouncilPhase(): void {
+/** While you watch from the jury, a couple of castaways still talk to the camera. */
+async function campConfessionals(): Promise<void> {
+  const { season, cast, rng } = game!;
+  if (!cast.aiOn || season.phase !== "camp") return;
+  const speakers = rng.shuffle(season.active().map((p) => p.id)).slice(0, 2);
+  await Promise.all(speakers.map((id) => cast.confess(id)));
+}
+
+async function playToEnd(): Promise<void> {
+  const s = game!.season;
+  while (s.phase !== "complete") {
+    const before = s.councils.length;
+    await botsAct();
+    s.advance();
+    if (s.councils.length > before) afterCouncilRevealed();
+  }
+}
+
+async function runCouncilFromCouncilPhase(): Promise<void> {
   const s = game!.season;
   const before = s.councils.length;
+  busy("Lantern Council...");
   while (s.councils.length === before) {
-    botsAct();
+    await botsAct();
     s.advance();
   }
   afterCouncilRevealed();
@@ -576,27 +663,39 @@ function renderLeave(): void {
     }
     <div class="row"><button id="random">Leave, vote at random</button><button id="stay" class="primary">Stay</button></div>`);
   app.querySelectorAll<HTMLButtonElement>(".leave-vote").forEach((b) =>
-    b.addEventListener("click", () => leaveAndFinish(b.dataset.id)),
+    b.addEventListener("click", () => void leaveAndFinish(b.dataset.id)),
   );
-  on("#random", () => leaveAndFinish(undefined));
+  on("#random", () => void leaveAndFinish(undefined));
   on("#stay", () => (finalNow ? renderFinal() : renderSpectator()));
 }
 
-function leaveAndFinish(finalist: string | undefined): void {
-  const s = game!.season;
-  s.jurorLeaves(YOU, finalist);
-  while (s.phase !== "complete") {
-    const before = s.councils.length;
-    botsAct();
-    s.advance();
-    if (s.councils.length > before) afterCouncilRevealed();
-  }
+async function leaveAndFinish(finalist: string | undefined): Promise<void> {
+  game!.season.jurorLeaves(YOU, finalist);
+  busy("Playing out the rest of the season...");
+  await playToEnd();
   renderEnd();
 }
 
 // ---------- final council ----------
 
-function renderFinal(): void {
+function pleasHtml(includeYours = false): string {
+  const pleas = game!.cast.finalPleas().filter((p) => includeYours || p.from !== me().name);
+  return pleas.length
+    ? `<section class="card"><h3>The finalists' speeches</h3>${pleas.map((p) => `<p><b>${esc(p.from)}:</b> ${esc(p.text)}</p>`).join("")}</section>`
+    : "";
+}
+
+/** Jury votes are in: resolve, then show a revote or the result. */
+async function resolveFinal(): Promise<void> {
+  const s = game!.season;
+  busy("The jury's votes are read...");
+  await botsAct();
+  s.advance();
+  if (s.phase === "final") return renderFinal();
+  renderEnd();
+}
+
+async function renderFinal(): Promise<void> {
   const s = game!.season;
   const finalists = s.finalists();
   const youFinalist = finalists.includes(YOU);
@@ -622,10 +721,7 @@ function renderFinal(): void {
       (e) => {
         e.preventDefault();
         game!.finalStatement = ((e.target as HTMLFormElement).elements.namedItem("text") as HTMLTextAreaElement).value;
-        botsAct();
-        s.advance();
-        if (s.phase === "final") return renderFinal();
-        renderEnd();
+        void resolveFinal();
       },
       "submit",
     );
@@ -633,9 +729,12 @@ function renderFinal(): void {
   }
 
   if (youVote) {
+    busy("The finalists make their case...");
+    await game!.cast.preparePleas();
     page(`
       <h1>Final Lantern Council${revote ? ": jury revote" : ""}</h1>
       <p class="lead">You're on the jury. Who deserves to be the Sole Castaway?</p>
+      ${pleasHtml()}
       <div class="options">${finalists
         .map((id) => `<button class="jury-vote primary" data-id="${id}">${esc(name(id))}</button>`)
         .join("")}</div>
@@ -643,10 +742,7 @@ function renderFinal(): void {
     app.querySelectorAll<HTMLButtonElement>(".jury-vote").forEach((b) =>
       b.addEventListener("click", () => {
         s.castJuryVote(YOU, b.dataset.id as string);
-        botsAct();
-        s.advance();
-        if (s.phase === "final") return renderFinal();
-        renderEnd();
+        void resolveFinal();
       }),
     );
     on("#leave", renderLeave);
@@ -654,8 +750,9 @@ function renderFinal(): void {
   }
 
   // Not a finalist and not voting (out before the merge, or left): just resolve it.
+  busy("The jury decides...");
   while (s.phase === "final") {
-    botsAct();
+    await botsAct();
     s.advance();
   }
   renderEnd();
@@ -677,6 +774,7 @@ function renderEnd(): void {
     <ol class="reveal">${voteList(f.votes)}</ol>
     ${f.revote ? `<h3>Jury revote</h3><ol class="reveal">${voteList(f.revote)}</ol>` : ""}
     ${f.drewLots ? `<p>The jury stayed tied, so lots were drawn.</p>` : ""}
+    ${pleasHtml(true)}
     <section class="card"><h3>Season recap: every confessional</h3>${
       s.confessionals.length
         ? s.confessionals.map((c) => `<p><b>${esc(name(c.player))}</b> (round ${c.round}): ${esc(c.text)}</p>`).join("")
