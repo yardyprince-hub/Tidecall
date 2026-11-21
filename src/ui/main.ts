@@ -167,7 +167,7 @@ function enterCamp(): void {
   botsAct();
   const mates = campmates();
   const names = mates.map(name);
-  for (const id of rng.shuffle(mates).slice(0, 3)) say(campChannel(), id, chatter.camp(rng, [...names, me().name]));
+  for (const id of rng.shuffle(mates).slice(0, 3)) say(campChannel(), id, chatter.camp(rng, [...names, me().name].filter((n) => n !== name(id))));
   for (const id of mates) if (rng.chance(0.5)) season.addConfessional(id, chatter.confessional(rng, names));
   game!.channel = campChannel();
   renderCamp();
@@ -211,9 +211,11 @@ function wireChat(rerender: () => void, lines: (rng: Rng, names: string[]) => st
       say(channel, YOU, text);
       const others = campmates().map(name);
       if (channel.startsWith("dm:")) {
-        say(channel, channel.slice(3), chatter.dmReply(rng, others));
+        const who = channel.slice(3);
+        say(channel, who, chatter.dmReply(rng, others.filter((n) => n !== name(who))));
       } else if (rng.chance(0.7)) {
-        say(channel, rng.pick(campmates()), lines(rng, [...others, me().name]));
+        const who = rng.pick(campmates());
+        say(channel, who, lines(rng, [...others, me().name].filter((n) => n !== name(who))));
       }
       rerender();
       (app.querySelector("#say input") as HTMLInputElement | null)?.focus();
@@ -377,7 +379,7 @@ function enterScramble(): void {
   const { rng } = game!;
   const mates = campmates().filter((id) => game!.season.councilAttendees().includes(id));
   const names = mates.map(name);
-  for (const id of rng.shuffle(mates).slice(0, 3)) say(campChannel(), id, chatter.scramble(rng, [...names, me().name]));
+  for (const id of rng.shuffle(mates).slice(0, 3)) say(campChannel(), id, chatter.scramble(rng, [...names, me().name].filter((n) => n !== name(id))));
   game!.channel = campChannel();
   renderScramble();
 }

@@ -60,6 +60,8 @@ const RX = 680;
 const RY = 440;
 const SPEED = 190; // world px per second
 const REACH = 64;
+/** How far you can see. Castaways further away are hidden, so nobody can track who wanders off to dig. */
+export const VISION = 230;
 
 export const CREW_COLORS: Record<string, string> = {
   Coral: "#ff8a75",
@@ -230,7 +232,7 @@ export class Island {
 
   private thingAt(x: number, y: number): Interaction | null {
     for (const w of this.walkers.values()) {
-      if (!w.isYou && Math.hypot(w.x - x, w.y - y) < 26) return { kind: "castaway", id: w.id };
+      if (!w.isYou && this.canSee(w) && Math.hypot(w.x - x, w.y - y) < 26) return { kind: "castaway", id: w.id };
     }
     for (const l of this.landmarks) {
       if (Math.hypot(l.x - x, l.y - y) < 40) return { kind: l.kind } as Interaction;
@@ -248,6 +250,12 @@ export class Island {
   }
 
   // ---------- simulation ----------
+
+  /** Whether the player can see this castaway right now (line of sight is a simple radius). */
+  canSee(w: { x: number; y: number }): boolean {
+    const me = this.you();
+    return Math.hypot(w.x - me.x, w.y - me.y) <= VISION;
+  }
 
   private you(): Walker {
     for (const w of this.walkers.values()) if (w.isYou) return w;
@@ -318,23 +326,39 @@ export class Island {
     }
   }
 
+  /**
+   * Castaways leave camp for all sorts of reasons (water, firewood, fishing, a walk, a dig),
+   * so being away from camp never gives a searcher away on its own.
+   */
   private pickWanderTarget(w: Walker): void {
     if (w.pairedWith) {
       const other = this.walkers.get(w.pairedWith);
       if (other) other.pairedWith = null;
       w.pairedWith = null;
     }
+    const roll = this.rng.next();
     const home = this.campFor(this.opts.merged ? "merged" : w.crew);
-    for (let i = 0; i < 10; i++) {
+    let target: { x: number; y: number } | null = null;
+    if (roll < 0.15) {
+      const spot = this.rng.pick(this.landmarks.filter((l) => l.kind === "dig"));
+      target = { x: spot.x + (this.rng.next() - 0.5) * 30, y: spot.y + (this.rng.next() - 0.5) * 20 };
+    } else if (roll < 0.5) {
+      for (let i = 0; i < 12 && !target; i++) {
+        const x = 150 + this.rng.next() * 1300;
+        const y = 130 + this.rng.next() * 840;
+        if (islandRadius(x, y) < 0.93) target = { x, y };
+      }
+    }
+    for (let i = 0; i < 10 && !target; i++) {
       const angle = this.rng.next() * Math.PI * 2;
       const r = 40 + this.rng.next() * 170;
       const x = home.x + Math.cos(angle) * r;
       const y = home.y + Math.sin(angle) * r * 0.8;
-      if (islandRadius(x, y) < 0.9) {
-        w.tx = x;
-        w.ty = y;
-        break;
-      }
+      if (islandRadius(x, y) < 0.9) target = { x, y };
+    }
+    if (target) {
+      w.tx = target.x;
+      w.ty = target.y;
     }
     w.wait = 1.5 + this.rng.next() * 4;
   }
@@ -360,7 +384,8 @@ export class Island {
     a.wait = b.wait = 6;
     a.bubble = { text: "…", until: now + 7000 };
     b.bubble = { text: "…", until: now + 7000 };
-    this.opts.onRumor(`${a.name} and ${b.name} slipped off to talk.`);
+    // You only learn about it if you can see them leave together.
+    if (this.canSee(a) && this.canSee(b)) this.opts.onRumor(`You notice ${a.name} and ${b.name} slip off to talk.`);
   }
 
   private findNearby(me: Walker): Interaction | null {
@@ -465,8 +490,23 @@ export class Island {
     for (const p of this.palms) this.drawPalm(p.x, p.y, p.r);
 
     const sorted = [...this.walkers.values()].sort((a, b) => a.y - b.y);
-    for (const wk of sorted) this.drawWalker(wk, t);
-    for (const wk of sorted) if (wk.bubble) this.drawBubble(wk.x, wk.y - 44, wk.bubble.text);
+    const seen = sorted.filter((wk) => wk.isYou || this.canSee(wk));
+    for (const wk of seen) this.drawWalker(wk, t);
+    ctx.restore();
+
+    // Line of sight: everything beyond your vision fades into shadow.
+    const me = this.you();
+    const sx = me.x + ox;
+    const sy = me.y + oy;
+    const fog = ctx.createRadialGradient(sx, sy, VISION * 0.7, sx, sy, VISION);
+    fog.addColorStop(0, "rgba(6,16,26,0)");
+    fog.addColorStop(1, "rgba(6,16,26,0.62)");
+    ctx.fillStyle = fog;
+    ctx.fillRect(0, 0, w, h);
+
+    ctx.save();
+    ctx.translate(ox, oy);
+    for (const wk of seen) if (wk.bubble) this.drawBubble(wk.x, wk.y - 44, wk.bubble.text);
     ctx.restore();
 
     // HUD: prompt and toast.
