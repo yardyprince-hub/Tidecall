@@ -5,15 +5,17 @@
   "description": "Tidecall: an online social strategy game where shipwrecked castaways play a full season.",
   "type": "module",
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json --noEmit && vite build",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
-    "sim": "tsx src/sim.ts"
+    "sim": "tsx src/sim.ts",
+    "dev": "vite"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",
+    "vite": "^5.4.11",
     "vitest": "^2.1.8"
   }
 }
