@@ -12,6 +12,9 @@ import { chatter } from "./chatter.js";
 import { describeItem, Island, type Interaction } from "./island.js";
 
 const YOU = "you";
+/** How long camp lasts before the challenge starts on its own. The start screen offers these. */
+const CAMP_TIME_CHOICES = [60, 120, 180];
+const DEFAULT_CAMP_SECONDS = 60;
 const CASTAWAY_NAMES = ["Ana", "Bo", "Cyra", "Dez", "Emre", "Fen", "Gil", "Hana", "Isa", "Jory", "Kai", "Lu"];
 
 interface Game {
@@ -24,11 +27,15 @@ interface Game {
   channel: string;
   lastChallenge: ChallengeKind | null;
   finalStatement: string;
+  /** Seconds of camp time before each challenge starts on its own. */
+  campSeconds: number;
 }
 
 const app = document.getElementById("app") as HTMLElement;
 let game: Game | null = null;
 let island: Island | null = null;
+/** The camp countdown, if one is running. */
+let campClock: ReturnType<typeof setInterval> | null = null;
 let ai: AiStatus = { enabled: false };
 /** Who is "typing" right now, shown under the chat. */
 const typing = new Set<PlayerId>();
@@ -130,7 +137,13 @@ function rank(group: string): number {
   return 1;
 }
 
+function stopCampClock(): void {
+  if (campClock) clearInterval(campClock);
+  campClock = null;
+}
+
 function page(main: string): void {
+  stopCampClock();
   island?.destroy();
   island = null;
   app.innerHTML = `<div class="layout">${game ? sidebar() : ""}<main class="panel">${main}</main></div>`;
@@ -149,6 +162,11 @@ function renderStart(): void {
     <p class="lead">Your ship went down. Seven strangers washed up with you. Only one leaves as the Sole Castaway, and the people you vote out decide who.</p>
     <form id="start" class="stack">
       <label>Your name <input name="name" maxlength="16" required value="Castaway" /></label>
+      <label>Camp time before each challenge
+        <select name="camp">${CAMP_TIME_CHOICES.map(
+          (sec) => `<option value="${sec}" ${sec === DEFAULT_CAMP_SECONDS ? "selected" : ""}>${sec / 60} minute${sec === 60 ? "" : "s"}</option>`,
+        ).join("")}</select>
+      </label>
       <button class="primary" type="submit">Wash ashore</button>
     </form>
     <p class="note" id="ai-note">Checking for AI castaways...</p>`);
@@ -164,15 +182,17 @@ function renderStart(): void {
     "#start",
     async (e) => {
       e.preventDefault();
-      const input = (e.target as HTMLFormElement).elements.namedItem("name") as HTMLInputElement;
+      const form = e.target as HTMLFormElement;
+      const input = form.elements.namedItem("name") as HTMLInputElement;
+      const camp = Number((form.elements.namedItem("camp") as HTMLSelectElement).value) || DEFAULT_CAMP_SECONDS;
       await ready;
-      startSeason(input.value.trim() || "Castaway");
+      startSeason(input.value.trim() || "Castaway", camp);
     },
     "submit",
   );
 }
 
-function startSeason(playerName: string): void {
+function startSeason(playerName: string, campSeconds = DEFAULT_CAMP_SECONDS): void {
   const seed = Math.floor(Math.random() * 1e9);
   const rng = new Rng(seed);
   const others = rng.shuffle(CASTAWAY_NAMES).slice(0, 7);
@@ -182,7 +202,7 @@ function startSeason(playerName: string): void {
   const castaways = others.map((n, i) => new AiCastaway(n.toLowerCase(), personas[i]!, seed + i + 1));
   const chat: ChatMessage[] = [];
   const cast = new Cast(season, YOU, castaways, () => chat, ai.enabled ? httpAiClient : null);
-  game = { season, cast, rng, seed, chat, channel: "crew", lastChallenge: null, finalStatement: "" };
+  game = { season, cast, rng, seed, chat, channel: "crew", lastChallenge: null, finalStatement: "", campSeconds };
   void enterCamp();
 }
 
@@ -298,6 +318,7 @@ function renderCamp(): void {
     <p class="lead">${s.isMerged ? "One camp now. Every castaway for themselves." : `You're on the ${esc(me().crew)} crew.`} Walk with WASD or the arrow keys, or tap where you want to go. Walk up to a castaway or a place and press E.</p>
     <div class="island-wrap">
       <canvas id="island" aria-label="The island. Use WASD or arrow keys to walk, E to interact."></canvas>
+      <div id="camp-clock" class="camp-clock" role="timer" aria-live="off"></div>
       <button id="act" class="act">Interact</button>
     </div>
     <div id="camp-status" class="camp-status"></div>
@@ -305,7 +326,7 @@ function renderCamp(): void {
     <div id="chat-slot"></div>
     <div id="conf-slot"></div>
     <div class="row">
-      <button id="go" class="primary">Head to the challenge</button>
+      <button id="go" class="primary">Head to the challenge early</button>
       <span class="note">Tip: walk up to a palm, fruit tree or the fishing rocks and press E to gather (hold E to keep going). Dig spots are the X marks on the beach.</span>
     </div>`);
   const canvas = app.querySelector("#island") as HTMLCanvasElement;
@@ -340,6 +361,7 @@ function renderCamp(): void {
   lines.forEach((m, i) => setTimeout(() => island?.say(m.from, m.text), 600 + i * 1800));
   renderChatSlot();
   refreshCampStatus();
+  startCampClock();
   on("#act", () => island?.interact());
   on("#go", goToChallenge);
 }
@@ -393,7 +415,34 @@ function renderChatSlot(): void {
   wireChat(renderChatSlot, chatter.camp, "camp");
 }
 
+/** Camp lasts a set time; when the clock runs out, the challenge starts whether you're ready or not. */
+function startCampClock(): void {
+  stopCampClock();
+  const g = game!;
+  const round = g.season.round;
+  const deadline = performance.now() + g.campSeconds * 1000;
+  let warned = false;
+  const tick = () => {
+    const el = app.querySelector<HTMLElement>("#camp-clock");
+    if (game !== g || g.season.round !== round || g.season.phase !== "camp" || !el) return stopCampClock();
+    const left = Math.max(0, Math.ceil((deadline - performance.now()) / 1000));
+    el.textContent = `Challenge in ${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")}`;
+    el.classList.toggle("urgent", left <= 10);
+    if (left <= 10 && !warned) {
+      warned = true;
+      island?.showToast("The challenge drums are sounding. 10 seconds!", 3000);
+    }
+    if (left === 0) {
+      stopCampClock();
+      goToChallenge();
+    }
+  };
+  tick();
+  campClock = setInterval(tick, 250);
+}
+
 function goToChallenge(): void {
+  if (game!.season.phase !== "camp") return;
   game!.season.advance();
   renderChallengeIntro();
 }

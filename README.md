@@ -38,6 +38,11 @@ back to a stand-in line or vote, and the terminal running `npm run dev` says why
 
 ## Camp life
 
+Camp is on a clock: a countdown in the corner of the island shows how long until the challenge,
+and when it hits zero the challenge starts whether you're ready or not. The start screen lets you
+pick 1, 2 or 3 minutes (1 is the default; the choices are `CAMP_TIME_CHOICES` in
+`src/ui/main.ts`). You can still head to the challenge early.
+
 Camp is real work now. Every castaway has a day's worth of energy (shown under the island):
 
 - **Palms** (all over the island): walk up, press E (hold E to keep going). Each trip brings back

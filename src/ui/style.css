@@ -116,3 +116,6 @@ h1.busy { animation: busy-pulse 1.6s ease-in-out infinite; }
   .stat { grid-template-columns: 80px 1fr; }
   .stat > span:last-child { grid-column: 1 / -1; }
 }
+.camp-clock { position: absolute; top: 10px; right: 10px; padding: 6px 12px; border-radius: 999px; background: rgba(13, 23, 32, 0.88); border: 1px solid var(--line); font-weight: 700; font-variant-numeric: tabular-nums; pointer-events: none; }
+.camp-clock.urgent { color: #fff; background: rgba(224, 103, 92, 0.92); border-color: var(--bad); animation: busy-pulse 1s ease-in-out infinite; }
+select { font: inherit; color: var(--ink); background: #0d1720; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; width: 100%; }
