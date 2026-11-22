@@ -3,29 +3,39 @@ import { AiCastaway, Cast, type ChatMessage } from "../ai/cast.js";
 import { httpAiClient } from "../ai/client.js";
 import { dealPersonas } from "../ai/personas.js";
 import type { AiStatus } from "../ai/protocol.js";
+import { formatFactor, MEALS_PER_DAY, REWARDS, shelterTier, SOURCES, type RewardItem } from "../engine/camp.js";
 import { Rng } from "../engine/rng.js";
 import { MERGED, Season } from "../engine/season.js";
 import { PROTOTYPE_CONFIG, type PlayerId } from "../engine/types.js";
 import { CHALLENGES, runChallenge, type ChallengeKind } from "./challenges.js";
 import { chatter } from "./chatter.js";
-import { Island, type Interaction } from "./island.js";
+import { describeItem, Island, type Interaction } from "./island.js";
 
 const YOU = "you";
+/** How long camp lasts before the challenge starts on its own. The start screen offers these. */
+const CAMP_TIME_CHOICES = [60, 120, 180];
+const DEFAULT_CAMP_SECONDS = 60;
 const CASTAWAY_NAMES = ["Ana", "Bo", "Cyra", "Dez", "Emre", "Fen", "Gil", "Hana", "Isa", "Jory", "Kai", "Lu"];
 
 interface Game {
   season: Season;
   cast: Cast;
   rng: Rng;
+  /** The season's seed: keeps the island's trees in the same places all season. */
+  seed: number;
   chat: ChatMessage[];
   channel: string;
   lastChallenge: ChallengeKind | null;
   finalStatement: string;
+  /** Seconds of camp time before each challenge starts on its own. */
+  campSeconds: number;
 }
 
 const app = document.getElementById("app") as HTMLElement;
 let game: Game | null = null;
 let island: Island | null = null;
+/** The camp countdown, if one is running. */
+let campClock: ReturnType<typeof setInterval> | null = null;
 let ai: AiStatus = { enabled: false };
 /** Who is "typing" right now, shown under the chat. */
 const typing = new Set<PlayerId>();
@@ -127,7 +137,13 @@ function rank(group: string): number {
   return 1;
 }
 
+function stopCampClock(): void {
+  if (campClock) clearInterval(campClock);
+  campClock = null;
+}
+
 function page(main: string): void {
+  stopCampClock();
   island?.destroy();
   island = null;
   app.innerHTML = `<div class="layout">${game ? sidebar() : ""}<main class="panel">${main}</main></div>`;
@@ -146,6 +162,11 @@ function renderStart(): void {
     <p class="lead">Your ship went down. Seven strangers washed up with you. Only one leaves as the Sole Castaway, and the people you vote out decide who.</p>
     <form id="start" class="stack">
       <label>Your name <input name="name" maxlength="16" required value="Castaway" /></label>
+      <label>Camp time before each challenge
+        <select name="camp">${CAMP_TIME_CHOICES.map(
+          (sec) => `<option value="${sec}" ${sec === DEFAULT_CAMP_SECONDS ? "selected" : ""}>${sec / 60} minute${sec === 60 ? "" : "s"}</option>`,
+        ).join("")}</select>
+      </label>
       <button class="primary" type="submit">Wash ashore</button>
     </form>
     <p class="note" id="ai-note">Checking for AI castaways...</p>`);
@@ -161,15 +182,17 @@ function renderStart(): void {
     "#start",
     async (e) => {
       e.preventDefault();
-      const input = (e.target as HTMLFormElement).elements.namedItem("name") as HTMLInputElement;
+      const form = e.target as HTMLFormElement;
+      const input = form.elements.namedItem("name") as HTMLInputElement;
+      const camp = Number((form.elements.namedItem("camp") as HTMLSelectElement).value) || DEFAULT_CAMP_SECONDS;
       await ready;
-      startSeason(input.value.trim() || "Castaway");
+      startSeason(input.value.trim() || "Castaway", camp);
     },
     "submit",
   );
 }
 
-function startSeason(playerName: string): void {
+function startSeason(playerName: string, campSeconds = DEFAULT_CAMP_SECONDS): void {
   const seed = Math.floor(Math.random() * 1e9);
   const rng = new Rng(seed);
   const others = rng.shuffle(CASTAWAY_NAMES).slice(0, 7);
@@ -179,7 +202,7 @@ function startSeason(playerName: string): void {
   const castaways = others.map((n, i) => new AiCastaway(n.toLowerCase(), personas[i]!, seed + i + 1));
   const chat: ChatMessage[] = [];
   const cast = new Cast(season, YOU, castaways, () => chat, ai.enabled ? httpAiClient : null);
-  game = { season, cast, rng, chat, channel: "crew", lastChallenge: null, finalStatement: "" };
+  game = { season, cast, rng, seed, chat, channel: "crew", lastChallenge: null, finalStatement: "", campSeconds };
   void enterCamp();
 }
 
@@ -198,7 +221,10 @@ async function enterCamp(): Promise<void> {
   // Camp talk, one after another so they can react to each other.
   for (const id of rng.shuffle(mates).slice(0, 3)) {
     if (game !== g || season.round !== round || season.phase !== "camp") return;
-    await speak(id, channel, "camp", () => chatter.camp(rng, namesFor(id)));
+    const chore = season.player(id).chore;
+    const canned = () =>
+      rng.chance(0.5) ? chatter.chore(rng, chore && chore.energy >= 3 ? chore.source : "rest") : chatter.camp(rng, namesFor(id));
+    await speak(id, channel, "camp", canned);
   }
   // Private confessionals, then each castaway's plan updates.
   if (game !== g || season.round !== round) return;
@@ -292,22 +318,39 @@ function renderCamp(): void {
     <p class="lead">${s.isMerged ? "One camp now. Every castaway for themselves." : `You're on the ${esc(me().crew)} crew.`} Walk with WASD or the arrow keys, or tap where you want to go. Walk up to a castaway or a place and press E.</p>
     <div class="island-wrap">
       <canvas id="island" aria-label="The island. Use WASD or arrow keys to walk, E to interact."></canvas>
+      <div id="camp-clock" class="camp-clock" role="timer" aria-live="off"></div>
       <button id="act" class="act">Interact</button>
     </div>
+    <div id="camp-status" class="camp-status"></div>
     <p id="rumor" class="note rumor"></p>
     <div id="chat-slot"></div>
     <div id="conf-slot"></div>
     <div class="row">
-      <button id="go" class="primary">Head to the challenge</button>
-      <span class="note">Tip: dig spots are marked with an X on the beach. One dig per round.</span>
+      <button id="go" class="primary">Head to the challenge early</button>
+      <span class="note">Tip: walk up to a palm, fruit tree or the fishing rocks and press E to gather (hold E to keep going). Dig spots are the X marks on the beach.</span>
     </div>`);
   const canvas = app.querySelector("#island") as HTMLCanvasElement;
   island = new Island(canvas, {
-    castaways: s.active().map((p) => ({ id: p.id, name: p.name, crew: p.crew, isYou: p.id === YOU })),
+    castaways: s.active().map((p) => ({
+      id: p.id,
+      name: p.name,
+      crew: p.crew,
+      isYou: p.id === YOU,
+      job: p.chore ? { source: p.chore.source, trips: Math.floor((p.chore.energy - p.chore.spent) / SOURCES[p.chore.source].energy) } : null,
+    })),
     merged: s.isMerged,
     yourCrew: me().crew,
+    worldSeed: game!.seed,
     seed: s.round * 7919 + s.players.length,
     onInteract: handleIslandInteraction,
+    onGather: (id, source) => {
+      if (s.phase !== "camp" || s.player(id).status !== "active") return null;
+      const got = s.gather(id, source);
+      refreshCampStatus();
+      return got;
+    },
+    camp: (crew) => s.camp(crew),
+    dayProgress: () => 1 - me().energy / Math.max(1, me().maxEnergy),
     onRumor: (text) => {
       const el = app.querySelector("#rumor");
       if (el) el.textContent = text;
@@ -317,8 +360,52 @@ function renderCamp(): void {
   const lines = game!.chat.filter((m) => m.round === s.round && m.channel === campChannel() && m.from !== YOU);
   lines.forEach((m, i) => setTimeout(() => island?.say(m.from, m.text), 600 + i * 1800));
   renderChatSlot();
+  refreshCampStatus();
+  startCampClock();
   on("#act", () => island?.interact());
   on("#go", goToChallenge);
+}
+
+/** The camp panel under the island: shelter, food, your energy, gear, last night, who's pitching in. */
+function refreshCampStatus(): void {
+  const el = app.querySelector("#camp-status");
+  if (!el || !game) return;
+  const s = game.season;
+  const you = me();
+  const camp = s.campOf(YOU);
+  const members = s.campMembers(camp.name);
+  const tier = shelterTier(camp.materials);
+  const need = members.length * MEALS_PER_DAY;
+  const pct = (n: number, d: number) => `${Math.max(0, Math.min(100, (n / Math.max(1, d)) * 100))}%`;
+  const c = camp.condition;
+  const haul = (h: { wood: number; food: number }) =>
+    h.wood || h.food ? [h.wood ? `${h.wood} material${h.wood === 1 ? "" : "s"}` : "", h.food ? `${h.food} food` : ""].filter(Boolean).join(", ") : "nothing yet";
+  const items = (Object.keys(REWARDS) as RewardItem[]).map(
+    (i) => `<span class="gear ${camp.items.includes(i) ? "have" : ""}" title="${esc(describeItem(i))}">${esc(REWARDS[i].name)}</span>`,
+  );
+  el.innerHTML = `
+    <div class="stat">
+      <span class="stat-name">Shelter</span>
+      <span class="bar wood"><i style="width:${pct(camp.materials, tier.next ?? camp.materials)}"></i></span>
+      <span>${esc(tier.name)} · ${camp.materials}${tier.next ? ` / ${tier.next} for the next stage` : " materials"}</span>
+    </div>
+    <div class="stat">
+      <span class="stat-name">Food</span>
+      <span class="bar food ${camp.food < need ? "short" : ""}"><i style="width:${pct(camp.food, need)}"></i></span>
+      <span>${camp.food} meals · your camp eats ${need} tonight</span>
+    </div>
+    <div class="stat">
+      <span class="stat-name">Your energy</span>
+      <span class="bar energy"><i style="width:${pct(you.energy, you.maxEnergy)}"></i></span>
+      <span>${you.energy} / ${you.maxEnergy} · palm or fruit 1, fishing 2</span>
+    </div>
+    <div class="gear-row"><span class="stat-name">Camp gear</span> ${items.join("")}</div>
+    <p class="note">${
+      s.round === 1 && c.parts.length === 0
+        ? "Night falls after the challenge. With no shelter and no food, everyone will be weaker at the next challenge."
+        : `Last night: ${esc(c.parts.map((p) => `${p.label} (${formatFactor(1 + p.delta)})`).join(", "))}. Challenge condition ${formatFactor(c.factor)}.`
+    }</p>
+    <p class="note">Pitching in today: ${members.map((p) => `${esc(p.id === YOU ? "You" : p.name)} ${haul(p.gathered)}`).join(" · ")}</p>`;
 }
 
 function renderChatSlot(): void {
@@ -328,7 +415,34 @@ function renderChatSlot(): void {
   wireChat(renderChatSlot, chatter.camp, "camp");
 }
 
+/** Camp lasts a set time; when the clock runs out, the challenge starts whether you're ready or not. */
+function startCampClock(): void {
+  stopCampClock();
+  const g = game!;
+  const round = g.season.round;
+  const deadline = performance.now() + g.campSeconds * 1000;
+  let warned = false;
+  const tick = () => {
+    const el = app.querySelector<HTMLElement>("#camp-clock");
+    if (game !== g || g.season.round !== round || g.season.phase !== "camp" || !el) return stopCampClock();
+    const left = Math.max(0, Math.ceil((deadline - performance.now()) / 1000));
+    el.textContent = `Challenge in ${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")}`;
+    el.classList.toggle("urgent", left <= 10);
+    if (left <= 10 && !warned) {
+      warned = true;
+      island?.showToast("The challenge drums are sounding. 10 seconds!", 3000);
+    }
+    if (left === 0) {
+      stopCampClock();
+      goToChallenge();
+    }
+  };
+  tick();
+  campClock = setInterval(tick, 250);
+}
+
 function goToChallenge(): void {
+  if (game!.season.phase !== "camp") return;
   game!.season.advance();
   renderChallengeIntro();
 }
@@ -401,14 +515,29 @@ function renderChallengeIntro(): void {
   const stakes = season.isMerged
     ? "Win and you earn the Ward: nobody can vote for you tonight."
     : "Crew scores are averaged. The losing crew goes to Lantern Council.";
+  const yours = season.campOf(YOU).condition;
+  const ease = yours.factor;
+  const feel =
+    ease >= 1.05
+      ? "You're rested and fed, so this one is a little easier for you."
+      : ease <= 0.95
+        ? "You're tired and hungry, so this one is harder for you."
+        : "You're holding up okay.";
+  const others = [...season.crews().keys()]
+    .filter((crew) => crew !== me().crew)
+    .map((crew) => {
+      const f = season.camp(crew).condition.factor;
+      return `${esc(crew)} crew looks ${f >= 1.05 ? "well rested" : f <= 0.9 ? "worn out and hungry" : "tired"}.`;
+    });
   page(`
     <h1>Challenge: ${c.title}</h1>
     <p class="lead">${c.howTo}</p>
     <p>${stakes}</p>
+    <p class="condition ${ease >= 1 ? "good" : "bad"}">Condition ${formatFactor(ease)}: ${esc(yours.shelter.toLowerCase())}, ${esc(yours.meals.toLowerCase())}. ${feel} ${others.join(" ")}</p>
     <div id="arena" class="arena"><button id="begin" class="primary">Begin</button></div>`);
   on("#begin", async () => {
     const arena = app.querySelector("#arena") as HTMLElement;
-    const score = await runChallenge(kind, arena, rng);
+    const score = await runChallenge(kind, arena, rng, ease);
     season.submitChallengeScore(YOU, score);
     await botsAct();
     season.advance();
@@ -427,9 +556,16 @@ function renderChallengeResult(score: number): void {
     : atCouncil
       ? "Your crew lost. You're going to Lantern Council."
       : "Your crew won. You're safe tonight.";
+  const rewards = s.lastRewards.map((r) => {
+    const ours = r.camp === me().crew;
+    const who = r.camp === MERGED ? "The camp" : ours ? "Your crew" : `${esc(r.camp)} crew`;
+    if (!r.item) return `<p class="reward">${who} wins a crate of food for camp.</p>`;
+    return `<p class="reward ${ours ? "ours" : ""}">${who} wins a reward: <b>${esc(REWARDS[r.item].name)}</b>. ${esc(REWARDS[r.item].effect)}</p>`;
+  });
   page(`
     <h1>${headline}</h1>
     <p class="lead">Your score: ${score} / 1000.</p>
+    ${rewards.join("")}
     <button id="go" class="primary">${atCouncil ? "Talk before council" : "Watch the other crew's council"}</button>`);
   on("#go", () => (atCouncil ? enterScramble() : void runCouncilWithoutYou()));
 }
@@ -783,5 +919,8 @@ function renderEnd(): void {
     <button id="again" class="primary">Play another season</button>`);
   on("#again", renderStart);
 }
+
+// In development only: lets a test script peek at the season.
+if (import.meta.env.DEV) (window as unknown as { tidecall: () => Game | null }).tidecall = () => game;
 
 renderStart();

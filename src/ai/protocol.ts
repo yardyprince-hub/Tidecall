@@ -44,6 +44,12 @@ export interface CastawayView {
   privateChat: Line[];
   /** What was said today in the group chat they can hear. */
   groupChat: Line[];
+  /** The state of their camp: shelter, food store, gear, how last night went. */
+  campLife: string[];
+  /** What they are doing around camp today (their real chore, so their words can match it). */
+  todaysWork: string;
+  /** What each campmate has brought back to camp, today and yesterday. Everyone at camp can see this. */
+  contributions: string[];
   /** The human player's name, so prompts can refer to them. */
   humanName: string;
 }

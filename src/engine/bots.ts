@@ -1,3 +1,4 @@
+import { gatherYield, MEALS_PER_DAY, SOURCES, type GatherSource } from "./camp.js";
 import { Rng } from "./rng.js";
 import type { Season } from "./season.js";
 import type { PlayerId } from "./types.js";
@@ -21,6 +22,8 @@ export class PlaceholderBot implements Castaway {
   readonly id: PlayerId;
   private rng: Rng;
   private skill: number;
+  /** How hard they work around camp, 0.2 (barely lifts a finger) to 1 (works all day). */
+  readonly workEthic: number;
   /** How much this bot likes each other castaway, roughly -1..1. */
   private affinity = new Map<PlayerId, number>();
 
@@ -28,6 +31,7 @@ export class PlaceholderBot implements Castaway {
     this.id = id;
     this.rng = new Rng(seed);
     this.skill = 0.3 + this.rng.next() * 0.7;
+    this.workEthic = 0.2 + this.rng.next() * 0.8;
   }
 
   private like(id: PlayerId): number {
@@ -37,11 +41,14 @@ export class PlaceholderBot implements Castaway {
 
   onCamp(season: Season): void {
     if (!season.player(this.id).searchedThisRound) season.searchForRelic(this.id);
+    if (!season.player(this.id).chore) planChore(season, this.id, this.workEthic);
   }
 
   onChallenge(season: Season): void {
-    const score = Math.round(1000 * Math.max(0, this.skill + (this.rng.next() - 0.5) * 0.6));
-    season.submitChallengeScore(this.id, score);
+    // Rested, fed castaways do better; exhausted, hungry ones do worse.
+    const condition = season.campOf(this.id).condition.factor;
+    const raw = Math.max(0, this.skill + (this.rng.next() - 0.5) * 0.6) * condition;
+    season.submitChallengeScore(this.id, Math.min(1000, Math.round(1000 * raw)));
   }
 
   onCouncil(season: Season): void {
@@ -72,6 +79,26 @@ export class PlaceholderBot implements Castaway {
       else if (v.voter !== this.id && v.target !== this.id) this.affinity.set(v.voter, this.like(v.voter) + 0.05);
     }
   }
+}
+
+/**
+ * Decides what a computer castaway does at camp today. Food comes first if the store
+ * won't cover tonight's meal; otherwise they work on the shelter. How much of their
+ * energy they spend depends on their work ethic.
+ */
+export function planChore(season: Season, id: PlayerId, workEthic: number): void {
+  const me = season.player(id);
+  const camp = season.campOf(id);
+  const members = season.campMembers(camp.name);
+  let plannedFood = camp.food;
+  for (const p of members) {
+    if (p.id === id || !p.chore || SOURCES[p.chore.source].supply !== "food") continue;
+    const trips = Math.floor((p.chore.energy - p.chore.spent) / SOURCES[p.chore.source].energy);
+    plannedFood += trips * gatherYield(p.chore.source, camp.items);
+  }
+  const foodSource: GatherSource = gatherYield("fish", camp.items) >= 2 * gatherYield("fruit", camp.items) ? "fish" : "fruit";
+  const source: GatherSource = plannedFood < members.length * MEALS_PER_DAY + 1 ? foodSource : "palm";
+  season.setChore(id, source, Math.round(me.energy * workEthic));
 }
 
 /** Runs a season to the end with every seat played by a castaway. Returns the season. */

@@ -99,6 +99,19 @@ describe("AI castaways in a season", () => {
     expect(text).toContain("Your secret Ward relics: 0");
   });
 
+  it("tells a castaway about their camp and their real chore for the day", () => {
+    const { season, bots } = newSeason();
+    const cast = new Cast(season, "you", bots, () => [], fakeClient());
+    const mate = season.active().find((p) => p.id !== "you" && p.crew === season.player("you").crew)!;
+    season.setChore(mate.id, "palm", 8);
+    season.gather("you", "fruit");
+    const text = briefing(cast.view(mate.id));
+    expect(text).toContain("Today you cut palm fronds and branches for the camp (8 trips)");
+    expect(text).toContain("Shelter: 0 materials");
+    expect(text).toContain("You: today nothing");
+    expect(text).toContain(`${season.player("you").name}: today 1 food`);
+  });
+
   it("an AI confessional updates the castaway's private plan", async () => {
     const { season, bots } = newSeason();
     const cast = new Cast(season, "you", bots, () => [], fakeClient());

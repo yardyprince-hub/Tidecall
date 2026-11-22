@@ -1,3 +1,17 @@
+import {
+  BASE_ENERGY,
+  energyFor,
+  FOOD_CRATE,
+  gatherYield,
+  MERGE_FEAST,
+  newCamp,
+  REWARDS,
+  settleNight,
+  SOURCES,
+  type CampState,
+  type GatherSource,
+  type RewardItem,
+} from "./camp.js";
 import { Rng } from "./rng.js";
 import type {
   Confessional,
@@ -35,12 +49,15 @@ export class Season {
   readonly councils: CouncilResult[] = [];
   readonly confessionals: Confessional[] = [];
   final: FinalResult | null = null;
+  /** Rewards won at the last challenge: which camp, and what (null = a food crate). */
+  lastRewards: { camp: string; item: RewardItem | null }[] = [];
 
   private rng: Rng;
   private _phase: Phase = "camp";
   private _round = 1;
   private merged = false;
   private relicsFound = 0;
+  private camps = new Map<string, CampState>();
 
   private challengeScores = new Map<PlayerId, number>();
   private immune = new Set<PlayerId>();
@@ -75,6 +92,11 @@ export class Season {
       status: "active",
       relics: 0,
       searchedThisRound: false,
+      energy: BASE_ENERGY,
+      maxEnergy: BASE_ENERGY,
+      gathered: { wood: 0, food: 0 },
+      gatheredLastRound: { wood: 0, food: 0 },
+      chore: null,
     }));
     if (this.players.length <= config.mergeAt) {
       this.merge();
@@ -124,6 +146,25 @@ export class Season {
       out.set(p.crew, list);
     }
     return out;
+  }
+
+  /** The camp a player lives at (their crew's, or the merged camp). */
+  campOf(id: PlayerId): CampState {
+    return this.camp(this.player(id).crew);
+  }
+
+  camp(name: string): CampState {
+    let c = this.camps.get(name);
+    if (!c) {
+      c = newCamp(name);
+      this.camps.set(name, c);
+    }
+    return c;
+  }
+
+  /** Active players living at a camp. */
+  campMembers(name: string): Player[] {
+    return this.active().filter((p) => p.crew === name);
   }
 
   /** Players at the current council (empty outside council). */
@@ -178,6 +219,31 @@ export class Season {
     p.relics += 1;
     this.relicsFound += 1;
     return true;
+  }
+
+  /**
+   * One trip to gather: a palm (shelter materials), a fruit tree or the fishing rocks (food).
+   * Costs energy; returns how much was brought back, or null if the castaway is too tired.
+   */
+  gather(id: PlayerId, source: GatherSource): number | null {
+    this.require("camp");
+    const p = this.requireActive(id);
+    const { supply, energy } = SOURCES[source];
+    if (p.energy < energy) return null;
+    p.energy -= energy;
+    if (p.chore && p.chore.source === source) p.chore.spent += energy;
+    const camp = this.campOf(id);
+    const amount = gatherYield(source, camp.items);
+    if (supply === "wood") camp.materials += amount;
+    else camp.food += amount;
+    p.gathered[supply] += amount;
+    return amount;
+  }
+
+  /** A computer castaway's plan for the day. Whatever they haven't done by the end of camp, they finish then. */
+  setChore(id: PlayerId, source: GatherSource, energy: number): void {
+    const p = this.requireActive(id);
+    p.chore = { source, energy: Math.max(0, Math.min(energy, p.energy)), spent: 0 };
   }
 
   /** A private note "to the camera". The jury and the end-of-season recap can read these. */
@@ -249,6 +315,8 @@ export class Season {
   advance(): void {
     switch (this._phase) {
       case "camp":
+        this.finishChores();
+        this.nightAtCamp();
         this._phase = "challenge";
         this.challengeScores.clear();
         break;
@@ -287,6 +355,7 @@ export class Season {
       this.immune.add(winner.id);
       this.attendees = players.map((p) => p.id);
       this.note(`${winner.name} wins the challenge and earns a Ward.`);
+      this.lastRewards = [this.giveReward(MERGED)];
       return;
     }
 
@@ -300,6 +369,7 @@ export class Season {
     const worst = Math.min(...scored.map((s) => s.score));
     const loser = this.rng.pick(scored.filter((s) => s.score === worst));
     this.attendees = loser.members.map((m) => m.id);
+    this.lastRewards = scored.filter((s) => s !== loser).map((s) => this.giveReward(s.name));
     this.note(`${loser.name} crew loses the challenge and heads to Lantern Council.`);
   }
 
@@ -363,6 +433,57 @@ export class Season {
     }
   }
 
+  /** Gives a camp a piece of gear it doesn't have yet, or a food crate if it has everything. */
+  private giveReward(campName: string): { camp: string; item: RewardItem | null } {
+    const camp = this.camp(campName);
+    const missing = (Object.keys(REWARDS) as RewardItem[]).filter((i) => !camp.items.includes(i));
+    const who = campName === MERGED ? "The camp" : `${campName} crew`;
+    if (missing.length === 0) {
+      camp.food += FOOD_CRATE;
+      this.note(`${who} wins a crate of food.`);
+      return { camp: campName, item: null };
+    }
+    const item = this.rng.pick(missing);
+    camp.items.push(item);
+    this.note(`${who} wins a reward: ${REWARDS[item].name.toLowerCase()}.`);
+    return { camp: campName, item };
+  }
+
+  /** Computer castaways finish whatever they set out to do today. */
+  private finishChores(): void {
+    for (const p of this.active()) {
+      const chore = p.chore;
+      if (!chore) continue;
+      const cost = SOURCES[chore.source].energy;
+      while (chore.energy - chore.spent >= cost && p.energy >= cost) this.gather(p.id, chore.source);
+    }
+  }
+
+  /** Every camp eats, sleeps and weathers the night. Their condition carries into the challenge and the next day. */
+  private nightAtCamp(): void {
+    for (const [name, camp] of this.camps) {
+      const members = this.campMembers(name).length;
+      if (members === 0) continue;
+      const c = settleNight(camp, members);
+      const who = name === MERGED ? "the merged camp" : `${name} crew`;
+      this.note(`Night at camp for ${who}: ${c.shelter.toLowerCase()}, ${c.meals.toLowerCase()}.`);
+    }
+  }
+
+  /** A new day: energy comes from last night's condition, and today's hauls start at zero. */
+  private newDay(): void {
+    for (const p of this.players) {
+      p.searchedThisRound = false;
+      p.gatheredLastRound = p.gathered;
+      p.gathered = { wood: 0, food: 0 };
+      p.chore = null;
+      if (p.status === "active") {
+        p.maxEnergy = energyFor(this.campOf(p.id).condition);
+        p.energy = p.maxEnergy;
+      }
+    }
+  }
+
   private eliminate(id: PlayerId, drewLots: boolean, revote?: CouncilResult["revote"]): void {
     const p = this.player(id);
     p.status = this.merged ? "jury" : "out";
@@ -404,7 +525,7 @@ export class Season {
     }
     this._round += 1;
     this._phase = "camp";
-    for (const x of this.players) x.searchedThisRound = false;
+    this.newDay();
   }
 
   private resolveFinalStep(): void {
@@ -462,10 +583,20 @@ export class Season {
     shuffled.forEach((p, i) => {
       p.crew = this.config.crews[i % this.config.crews.length] as string;
     });
+    // Each crew's camp stays on its beach; castaways who move join whatever is there.
+    for (const name of this.config.crews) this.camp(name);
   }
 
   private merge(): void {
     this.merged = true;
+    // The merged camp moves into the best shelter, pools the food and gear, and gets a feast.
+    const old = [...this.camps.values()];
+    const camp = newCamp(MERGED, MERGE_FEAST + old.reduce((sum, c) => sum + c.food, 0));
+    camp.materials = Math.max(0, ...old.map((c) => c.materials));
+    camp.items = [...new Set(old.flatMap((c) => c.items))];
+    const best = old.sort((a, b) => b.condition.factor - a.condition.factor)[0];
+    if (best) camp.condition = best.condition;
+    this.camps = new Map([[MERGED, camp]]);
     for (const p of this.active()) p.crew = MERGED;
     this.note("The crews merge into one camp. From now on it's every castaway for themselves.");
   }

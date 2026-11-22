@@ -36,8 +36,36 @@ A full season is roughly 60 to 80 requests. To spend less, set `TIDECALL_MODEL=c
 or `TIDECALL_MODEL=claude-haiku-5-5` in `.env`. If a request fails, that castaway quietly falls
 back to a stand-in line or vote, and the terminal running `npm run dev` says why.
 
+## Camp life
+
+Camp is on a clock: a countdown in the corner of the island shows how long until the challenge,
+and when it hits zero the challenge starts whether you're ready or not. The start screen lets you
+pick 1, 2 or 3 minutes (1 is the default; the choices are `CAMP_TIME_CHOICES` in
+`src/ui/main.ts`). You can still head to the challenge early.
+
+Camp is real work now. Every castaway has a day's worth of energy (shown under the island):
+
+- **Palms** (all over the island): walk up, press E (hold E to keep going). Each trip brings back
+  shelter materials. The shelter needs a lot: 25 for a lean-to, 60 for a real shelter, 100 for a
+  sturdy one, and wind and rain strip some off every night. If nobody gathers, there's no shelter.
+- **Fruit trees** and the **fishing rocks** on the shore fill the food store. Every castaway eats
+  two meals a night.
+- **The night**: after camp, everyone eats and sleeps. A good shelter and full bellies make the
+  next challenge easier (longer glows, slower signals, a wider bridge) and give you more energy the
+  next day. Sleeping on the sand or going hungry does the opposite. The other castaways' challenge
+  scores are affected the same way.
+- **Rewards**: the crew that wins a challenge (after the merge, the whole camp when someone wins the
+  Ward) earns gear for camp: a tarp, blankets, flint, a fishing rod, a machete or a cooking pot.
+  Each one helps (hover the gear under the island to see how). Once a camp has everything, the
+  reward is a crate of food.
+- The other castaways pick a real job each day (food first if the store is low, otherwise the
+  shelter) and you can watch them walk out to the trees and rocks. How hard they work depends on
+  the person, and what they say about their work matches what they actually do. Everyone can see
+  who brought what back to camp, so slacking is something people will talk about.
+
 ## What's here so far
 
+- `src/engine/camp.ts`: camp life (gathering, the shelter stages, the night, food, rewards).
 - `src/engine/season.ts`: the rules of a season (crews, challenges, council votes, relics,
   ties and revotes, swap, merge, jury, final vote, jurors leaving early). No UI, AI or networking.
 - `src/engine/bots.ts`: simple placeholder castaways for testing, and `autoplay` to run a season.
@@ -48,8 +76,8 @@ back to a stand-in line or vote, and the terminal running `npm run dev` says why
 - `server/ai.ts`: the local server (a Vite plugin) that holds the API key and calls Claude.
 - `src/sim.ts`: plays a whole season with bots and prints it.
 - `src/ui/island.ts`: the walkable island drawn on a canvas. Walk with WASD, arrow keys or by
-  tapping; walk up to castaways, your camp fire, dig spots, the confession hut or the challenge
-  beach and press E.
+  tapping; walk up to castaways, your camp fire, palms, fruit trees, fishing rocks, dig spots, the
+  confession hut or the challenge beach and press E.
 - `src/ui/`: the browser game. Camp on the island (crew chat, private chats, relic digs, confessionals),
   three challenges (Tide Pools, Signal Fires, Rope Bridge), the scramble, Lantern Council with
   a one-by-one vote reveal, the Jury Lounge, the final council and an end-of-season recap.
