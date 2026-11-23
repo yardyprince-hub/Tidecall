@@ -142,11 +142,17 @@ function stopCampClock(): void {
   campClock = null;
 }
 
-function page(main: string): void {
+/**
+ * Draw a screen. With `side`, the screen is a fixed full-window game view: the roster on the left,
+ * the main view in the middle and `side` (the chat) on the right, so nothing needs page scrolling.
+ */
+function page(main: string, side?: string): void {
   stopCampClock();
   island?.destroy();
   island = null;
-  app.innerHTML = `<div class="layout">${game ? sidebar() : ""}<main class="panel">${main}</main></div>`;
+  app.innerHTML = side
+    ? `<div class="layout fit">${game ? sidebar() : ""}<main class="panel">${main}</main><aside class="chat-col">${side}</aside></div>`
+    : `<div class="layout">${game ? sidebar() : ""}<main class="panel">${main}</main></div>`;
 }
 
 function on(selector: string, handler: (e: Event) => void, event = "click"): void {
@@ -250,7 +256,7 @@ function chatPanel(phaseLabel: string): string {
         .map((c) => `<button class="tab ${c === channel ? "on" : ""}" data-ch="${c}">${esc(label(c))}</button>`)
         .join("")}</div>
       <div class="messages">${messagesHtml(phaseLabel)}</div>
-      <form id="say" class="row"><input name="text" maxlength="200" placeholder="Say something..." autocomplete="off" /><button>Send</button></form>
+      <form id="say" class="row"><input name="text" maxlength="200" placeholder="Message... (Esc to walk)" autocomplete="off" /><button>Send</button></form>
     </div>`;
 }
 
@@ -277,6 +283,12 @@ function refreshMessages(): void {
 }
 
 function wireChat(rerender: () => void, lines: (rng: Rng, names: string[]) => string, kind: "camp" | "scramble"): void {
+  const box = app.querySelector<HTMLElement>(".chat .messages");
+  if (box) box.scrollTop = box.scrollHeight;
+  // Esc leaves the chat box so WASD walks again.
+  app.querySelector<HTMLInputElement>("#say input")?.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") (e.target as HTMLInputElement).blur();
+  });
   app.querySelectorAll<HTMLButtonElement>(".tab").forEach((b) =>
     b.addEventListener("click", () => {
       game!.channel = b.dataset.ch as string;
@@ -313,22 +325,24 @@ function wireChat(rerender: () => void, lines: (rng: Rng, names: string[]) => st
 
 function renderCamp(): void {
   const s = game!.season;
-  page(`
-    <h1>Camp</h1>
-    <p class="lead">${s.isMerged ? "One camp now. Every castaway for themselves." : `You're on the ${esc(me().crew)} crew.`} Walk with WASD or the arrow keys, or tap where you want to go. Walk up to a castaway or a place and press E.</p>
+  page(
+    `
+    <header class="camp-head">
+      <div>
+        <h1>Camp</h1>
+        <p class="note">${s.isMerged ? "One camp now. Every castaway for themselves." : `You're on the ${esc(me().crew)} crew.`} Walk with WASD, arrows or a tap. Press E to talk, gather or dig (X marks on the beach); hold E to keep gathering.</p>
+      </div>
+      <button id="go" class="primary">Head to the challenge early</button>
+    </header>
     <div class="island-wrap">
       <canvas id="island" aria-label="The island. Use WASD or arrow keys to walk, E to interact."></canvas>
       <div id="camp-clock" class="camp-clock" role="timer" aria-live="off"></div>
+      <p id="rumor" class="rumor" aria-live="polite"></p>
       <button id="act" class="act">Interact</button>
     </div>
-    <div id="camp-status" class="camp-status"></div>
-    <p id="rumor" class="note rumor"></p>
-    <div id="chat-slot"></div>
-    <div id="conf-slot"></div>
-    <div class="row">
-      <button id="go" class="primary">Head to the challenge early</button>
-      <span class="note">Tip: walk up to a palm, fruit tree or the fishing rocks and press E to gather (hold E to keep going). Dig spots are the X marks on the beach.</span>
-    </div>`);
+    <div id="camp-status" class="camp-status"></div>`,
+    `<div id="conf-slot"></div><div id="chat-slot"></div>`,
+  );
   const canvas = app.querySelector("#island") as HTMLCanvasElement;
   island = new Island(canvas, {
     castaways: s.active().map((p) => ({
@@ -384,6 +398,7 @@ function refreshCampStatus(): void {
     (i) => `<span class="gear ${camp.items.includes(i) ? "have" : ""}" title="${esc(describeItem(i))}">${esc(REWARDS[i].name)}</span>`,
   );
   el.innerHTML = `
+    <div class="stats">
     <div class="stat">
       <span class="stat-name">Shelter</span>
       <span class="bar wood"><i style="width:${pct(camp.materials, tier.next ?? camp.materials)}"></i></span>
@@ -398,6 +413,7 @@ function refreshCampStatus(): void {
       <span class="stat-name">Your energy</span>
       <span class="bar energy"><i style="width:${pct(you.energy, you.maxEnergy)}"></i></span>
       <span>${you.energy} / ${you.maxEnergy} · palm or fruit 1, fishing 2</span>
+    </div>
     </div>
     <div class="gear-row"><span class="stat-name">Camp gear</span> ${items.join("")}</div>
     <p class="note">${
@@ -485,8 +501,9 @@ function handleIslandInteraction(what: Interaction): void {
         <section class="card">
           <h3>Confession hut</h3>
           <p>Talk to the camera. Nobody still playing will see this. The jury will.</p>
-          <form id="conf" class="stack"><textarea name="text" rows="2" maxlength="500"></textarea><button>Record</button></form>
+          <form id="conf" class="stack"><textarea name="text" rows="2" maxlength="500"></textarea><div class="row"><button class="primary">Record</button><button type="button" id="conf-cancel">Cancel</button></div></form>
         </section>`;
+      slot.querySelector("#conf-cancel")?.addEventListener("click", () => (slot.innerHTML = ""));
       const form = slot.querySelector("#conf") as HTMLFormElement;
       (form.elements.namedItem("text") as HTMLTextAreaElement).focus();
       form.addEventListener("submit", (e) => {

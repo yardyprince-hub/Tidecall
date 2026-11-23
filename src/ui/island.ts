@@ -531,7 +531,10 @@ export class Island {
       this.moveTarget = { x, y };
       this.pendingInteract = target;
     };
+    // The canvas fills whatever space the layout gives it, so follow its own size, not just the window's.
     const resize = () => this.resize();
+    const observer = new ResizeObserver(resize);
+    observer.observe(this.canvas);
     window.addEventListener("keydown", down);
     window.addEventListener("keyup", up);
     window.addEventListener("blur", blur);
@@ -542,6 +545,7 @@ export class Island {
       () => window.removeEventListener("keyup", up),
       () => window.removeEventListener("blur", blur),
       () => window.removeEventListener("resize", resize),
+      () => observer.disconnect(),
       () => this.canvas.removeEventListener("pointerdown", click),
     );
   }
