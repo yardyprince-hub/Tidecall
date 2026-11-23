@@ -119,3 +119,65 @@ h1.busy { animation: busy-pulse 1.6s ease-in-out infinite; }
 .camp-clock { position: absolute; top: 10px; right: 10px; padding: 6px 12px; border-radius: 999px; background: rgba(13, 23, 32, 0.88); border: 1px solid var(--line); font-weight: 700; font-variant-numeric: tabular-nums; pointer-events: none; }
 .camp-clock.urgent { color: #fff; background: rgba(224, 103, 92, 0.92); border-color: var(--bad); animation: busy-pulse 1s ease-in-out infinite; }
 select { font: inherit; color: var(--ink); background: #0d1720; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; width: 100%; }
+
+/* Full-window game screen (camp): roster | island | chat, no page scrolling. */
+.layout.fit {
+  height: 100vh;
+  height: 100dvh;
+  max-width: 1680px;
+  padding: 12px;
+  gap: 12px;
+  grid-template-columns: 190px minmax(0, 1fr) minmax(300px, 360px);
+  grid-template-areas: "side main chat";
+  overflow: hidden;
+}
+.layout.fit > * { min-height: 0; }
+.layout.fit > .sidebar { grid-area: side; align-self: stretch; overflow-y: auto; }
+.layout.fit > .panel { grid-area: main; display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; overflow: hidden; }
+.layout.fit > .chat-col { grid-area: chat; display: flex; flex-direction: column; gap: 12px; }
+.camp-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.camp-head h1 { font-size: 1.35rem; margin: 0; }
+.camp-head .note { margin: 0; font-size: 0.82rem; line-height: 1.35; }
+.camp-head button { flex: none; }
+.layout.fit .island-wrap { flex: 1; min-height: 220px; margin: 0; }
+.layout.fit #island { height: 100%; }
+.rumor { position: absolute; left: 10px; bottom: 10px; max-width: max(160px, calc(50% - 120px)); margin: 0; padding: 4px 12px; border-radius: 8px; background: rgba(13, 23, 32, 0.82); color: var(--muted); font-size: 0.85rem; pointer-events: none; }
+.rumor:empty { display: none; }
+.layout.fit .camp-status { margin: 0; padding: 8px 12px; gap: 4px; font-size: 0.85rem; }
+.camp-status .stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px 16px; align-items: start; }
+.camp-status .stats .stat { grid-template-columns: 1fr; gap: 3px; }
+.camp-status .stats .stat > span:last-child { font-size: 0.8rem; color: var(--muted); line-height: 1.3; }
+.camp-status .note { font-size: 0.8rem; line-height: 1.35; }
+.chat-col #conf-slot:empty { display: none; }
+.chat-col .card { margin: 0; border: 1px solid var(--line); }
+.chat-col .card h3 { margin: 0 0 4px; }
+.chat-col .card p { margin: 0 0 8px; font-size: 0.9rem; color: var(--muted); }
+.chat-col .card .row { margin-top: 0; }
+.chat-col #chat-slot { flex: 1; min-height: 0; display: flex; }
+.chat-col .chat { flex: 1; min-height: 0; margin: 0; display: flex; flex-direction: column; background: var(--panel); border-radius: 12px; padding: 12px; }
+.chat-col .messages { flex: 1; min-height: 0; max-height: none; }
+.chat-col .row { flex-wrap: nowrap; }
+
+/* Mid-size windows: the roster sits above the chat on the right. */
+@media (max-width: 1180px) {
+  .layout.fit {
+    grid-template-columns: minmax(0, 1fr) minmax(280px, 330px);
+    grid-template-rows: auto minmax(0, 1fr);
+    grid-template-areas: "main side" "main chat";
+  }
+  .layout.fit > .sidebar { max-height: 34vh; padding: 10px 14px; }
+  .layout.fit > .sidebar h2 { font-size: 1.1rem; margin: 0; }
+}
+/* Small or short screens: stack everything and let the page scroll, with a fixed-height chat. */
+@media (max-width: 820px), (max-height: 540px) {
+  .layout.fit { height: auto; overflow: visible; grid-template-columns: 1fr; grid-template-rows: none; grid-template-areas: "main" "chat" "side"; }
+  .layout.fit > .sidebar { max-height: none; }
+  .layout.fit .island-wrap { flex: none; }
+  .layout.fit #island { height: 380px; }
+  .rumor { position: static; max-width: none; margin-top: 6px; background: none; padding: 0; }
+  .camp-head { flex-direction: column; align-items: flex-start; }
+  .chat-col #chat-slot { flex: none; height: 420px; }
+}
+@media (max-width: 560px) {
+  .camp-status .stats { grid-template-columns: 1fr; }
+}
